@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ID格式化工具</title>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 40px 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.container {
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    padding: 40px;
+    max-width: 800px;
+    width: 100%;
+    animation: fadeIn 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.header h1 {
+    color: #333;
+    font-size: 28px;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.header p {
+    color: #888;
+    font-size: 14px;
+}
+
+.section-title {
+    color: #444;
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+}
+
+.section-title::before {
+    content: '';
+    width: 4px;
+    height: 16px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 2px;
+    margin-right: 8px;
+}
+
+textarea {
+    width: 100%;
+    height: 150px;
+    padding: 15px;
+    border: 2px solid #e0e0e0;
+    border-radius: 12px;
+    font-size: 14px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    resize: vertical;
+    transition: all 0.3s ease;
+    background: #f9f9f9;
+}
+
+textarea:focus {
+    outline: none;
+    border-color: #667eea;
+    background: white;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+textarea::placeholder {
+    color: #aaa;
+    font-family: inherit;
+}
+
+.options {
+    margin: 20px 0;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 12px;
+}
+
+.quote-options {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+
+.quote-option {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 8px 16px;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    border: 2px solid transparent;
+}
+
+.quote-option:hover {
+    background: white;
+    border-color: #667eea;
+}
+
+.quote-option input[type="radio"] {
+    width: 18px;
+    height: 18px;
+    margin-right: 8px;
+    cursor: pointer;
+    accent-color: #667eea;
+}
+
+.quote-option span {
+    font-size: 14px;
+    color: #555;
+}
+
+.button-group {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 20px 0;
+}
+
+.button {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.button:active {
+    transform: translateY(0);
+}
+
+.button-primary {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.button-secondary {
+    background: #f0f0f0;
+    color: #333;
+}
+
+.button-secondary:hover {
+    background: #e0e0e0;
+}
+
+.button-success {
+    background: #48bb78;
+    color: white;
+}
+
+.output-section {
+    margin-top: 20px;
+}
+
+#outputBox {
+    background: #f0f4ff;
+    border-color: #667eea;
+}
+
+.message {
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin: 10px 0;
+    font-size: 14px;
+    display: none;
+    align-items: center;
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.message.success {
+    background: #c6f6d5;
+    color: #22543d;
+    display: flex;
+}
+
+.message.error {
+    background: #fed7d7;
+    color: #822727;
+    display: flex;
+}
+
+.message::before {
+    content: '✓';
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+.message.error::before {
+    content: '!';
+}
+
+.stats {
+    display: flex;
+    gap: 20px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: #666;
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.stat-count {
+    font-weight: 600;
+    color: #667eea;
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 20px;
+    }
+
+    .header h1 {
+        font-size: 22px;
+    }
+
+    .button-group {
+        flex-direction: column;
+    }
+
+    .button {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .quote-options {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>📦 ID 格式化工具</h1>
+        <p>快速转换和格式化您的ID列表</p>
+    </div>
+
+    <div class="section-title">输入ID（换行/逗号/空格分隔）</div>
+    <textarea id="inputBox" placeholder="示例输入：
+123
+456
+789"></textarea>
+
+    <div class="message" id="message"></div>
+
+    <div class="options">
+        <div class="section-title">包裹符号</div>
+        <div class="quote-options">
+            <label class="quote-option">
+                <input type="radio" name="quote" value="'" checked>
+                <span>单引号 '</span>
+            </label>
+            <label class="quote-option">
+                <input type="radio" name="quote" value='"'>
+                <span>双引号 "</span>
+            </label>
+            <label class="quote-option">
+                <input type="radio" name="quote" value="">
+                <span>无符号</span>
+            </label>
+        </div>
+    </div>
+
+    <div class="button-group">
+        <button class="button button-primary" onclick="forward()">
+            <span>🔄</span> 正向拼接
+        </button>
+        <button class="button button-secondary" onclick="reverse()">
+            <span>⬅️</span> 反向拆分
+        </button>
+        <button class="button button-secondary" onclick="distinct()">
+            <span>🔍</span> 去除重复
+        </button>
+        <button class="button button-secondary" onclick="clearAll()">
+            <span>🗑️</span> 清空全部
+        </button>
+    </div>
+
+    <div class="output-section">
+        <div class="section-title">转换结果</div>
+        <textarea id="outputBox" readonly placeholder="转换结果将显示在这里..."></textarea>
+        <div class="stats">
+            <span class="stat-item">数量: <span class="stat-count" id="countDisplay">0</span></span>
+            <span class="stat-item">长度: <span class="stat-count" id="lengthDisplay">0</span> 字符</span>
+        </div>
+    </div>
+
+    <div class="button-group">
+        <button class="button button-success" onclick="copy()">
+            <span>📋</span> 复制结果
+        </button>
+    </div>
+</div>
+
+<script>
+// 显示消息
+function showMessage(msg, type) {
+    const el = document.getElementById('message');
+    el.textContent = msg;
+    el.className = 'message ' + type;
+    setTimeout(() => {
+        el.className = 'message';
+    }, 3000);
+}
+
+// 更新统计信息
+function updateStats(count, length) {
+    document.getElementById('countDisplay').textContent = count;
+    document.getElementById('lengthDisplay').textContent = length;
+}
+
+// 获取引号类型
+function getQuote() {
+    const selected = document.querySelector('input[name="quote"]:checked');
+    return selected ? selected.value : "'";
+}
+
+// 清洗分割文本
+function splitText(str) {
+    return str.trim().split(/[\n\r, ]+/).map(s => s.trim()).filter(s => s);
+}
+
+// 正向拼接
+function forward() {
+    const input = document.getElementById('inputBox');
+    const inputText = input.value;
+
+    if (!inputText.trim()) {
+        showMessage('请输入数字ID', 'error');
+        return;
+    }
+
+    const arr = splitText(inputText);
+    const quote = getQuote();
+    const result = arr.map(id => quote + id + quote).join(',');
+
+    document.getElementById('outputBox').value = result;
+    updateStats(arr.length, result.length);
+    showMessage(`✓ 转换完成！共 ${arr.length} 个ID`, 'success');
+
+    // 滚动到结果区域
+    document.querySelector('.output-section').scrollIntoView({
+        behavior: 'smooth',
+        block: 'near'
+    });
+}
+
+// 反向拆分
+function reverse() {
+    const input = document.getElementById('inputBox');
+    const inputText = input.value;
+
+    if (!inputText.trim()) {
+        showMessage('请输入带符号的字符串', 'error');
+        return;
+    }
+
+    const cleanText = inputText.replace(/['"]/g, '');
+    const arr = splitText(cleanText);
+    const result = arr.join('\n');
+
+    document.getElementById('outputBox').value = result;
+    updateStats(arr.length, result.length);
+    showMessage(`✓ 拆分完成！共 ${arr.length} 个ID`, 'success');
+}
+
+// 去重
+function distinct() {
+    const input = document.getElementById('inputBox');
+    const inputText = input.value;
+    const arr = splitText(inputText);
+    const unique = [...new Set(arr)];
+
+    input.value = unique.join('\n');
+    const removed = arr.length - unique.length;
+    updateStats(unique.length, input.value.length);
+
+    if (removed > 0) {
+        showMessage(`✓ 已去除 ${removed} 个重复ID`, 'success');
+    } else {
+        showMessage('✓ 没有重复ID', 'success');
+    }
+}
+
+// 清空
+function clearAll() {
+    document.getElementById('inputBox').value = '';
+    document.getElementById('outputBox').value = '';
+    updateStats(0, 0);
+    showMessage('✓ 已清空所有内容', 'error');
+}
+
+// 复制
+function copy() {
+    const output = document.getElementById('outputBox');
+
+    if (!output.value) {
+        showMessage('暂无转换内容', 'error');
+        return;
+    }
+
+    // 选择文本
+    output.select();
+    output.setSelectionRange(0, 99999);
+
+    // 尝试复制
+    navigator.clipboard.writeText(output.value)
+        .then(() => {
+            showMessage('✓ 已复制到剪贴板', 'success');
+        })
+        .catch(() => {
+            document.execCommand('copy');
+            showMessage('✓ 已复制到剪贴板', 'success');
+        });
+}
+
+// 监听输入变化，实时更新统计
+document.getElementById('inputBox').addEventListener('input', function() {
+    const arr = splitText(this.value);
+    updateStats(arr.length, this.value.length);
+});
+
+// 页面加载动画
+window.addEventListener('load', function() {
+    document.body.style.opacity = '1';
+});
+</script>
+</body>
+</html>
