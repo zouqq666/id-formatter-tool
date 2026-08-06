@@ -59,6 +59,50 @@ body {
     font-size: 14px;
 }
 
+/* 访问统计样式 */
+.stats-bar {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 12px;
+    padding: 10px 15px;
+    margin-top: 20px;
+    display: flex;
+    justify-content: space-around;
+    flex-wrap: wrap;
+    gap: 10px;
+    border: 1px solid #dee2e6;
+}
+
+.stat-item {
+    text-align: center;
+    flex: 1;
+    min-width: 100px;
+}
+
+.stat-label {
+    font-size: 10px;
+    color: #6c757d;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.stat-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: #667eea;
+}
+
+.stat-value.total {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.stat-value.today {
+    color: #48bb78;
+}
+
 .section-title {
     color: #444;
     font-size: 15px;
@@ -251,7 +295,7 @@ textarea::placeholder {
     color: #666;
 }
 
-.stat-item {
+.stat-row {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -284,6 +328,12 @@ textarea::placeholder {
         flex-direction: column;
         align-items: flex-start;
         gap: 10px;
+    }
+
+    .stats-bar {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 8px 10px;
     }
 }
 </style>
@@ -322,16 +372,16 @@ textarea::placeholder {
     </div>
 
     <div class="button-group">
-        <button class="button button-primary" onclick="forward()">
+        <button class="button button-primary" onclick="trackVisit(forward)">
             <span>🔄</span> 正向拼接
         </button>
-        <button class="button button-secondary" onclick="reverse()">
+        <button class="button button-secondary" onclick="trackVisit(reverse)">
             <span>⬅️</span> 反向拆分
         </button>
-        <button class="button button-secondary" onclick="distinct()">
+        <button class="button button-secondary" onclick="trackVisit(distinct)">
             <span>🔍</span> 去除重复
         </button>
-        <button class="button button-secondary" onclick="clearAll()">
+        <button class="button button-secondary" onclick="trackVisit(clearAll)">
             <span>🗑️</span> 清空全部
         </button>
     </div>
@@ -340,19 +390,163 @@ textarea::placeholder {
         <div class="section-title">转换结果</div>
         <textarea id="outputBox" readonly placeholder="转换结果将显示在这里..."></textarea>
         <div class="stats">
-            <span class="stat-item">数量: <span class="stat-count" id="countDisplay">0</span></span>
-            <span class="stat-item">长度: <span class="stat-count" id="lengthDisplay">0</span> 字符</span>
+            <span class="stat-row">数量: <span class="stat-count" id="countDisplay">0</span></span>
+            <span class="stat-row">长度: <span class="stat-count" id="lengthDisplay">0</span> 字符</span>
         </div>
     </div>
 
-    <div class="button-group">
-        <button class="button button-success" onclick="copy()">
+    <div class="button-group" style="margin-top: 20px;">
+        <button class="button button-success" onclick="trackVisit(copy)">
             <span>📋</span> 复制结果
         </button>
+    </div>
+
+    <!-- 访问统计 -->
+    <div class="stats-bar">
+        <div class="stat-item">
+            <div class="stat-label">累计访问次数</div>
+            <div class="stat-value total" id="totalVisits">0</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">累计访问人数</div>
+            <div class="stat-value" id="totalUsers">0</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">今日访问次数</div>
+            <div class="stat-value today" id="todayVisits">0</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">今日访问人数</div>
+            <div class="stat-value today" id="todayUsers">0</div>
+        </div>
     </div>
 </div>
 
 <script>
+// ==================== 访问统计模块 ====================
+
+// 统计数据的key
+const STATS_KEYS = {
+    TOTAL_VISITS: 'id_formatter_total_visits',
+    TOTAL_USERS: 'id_formatter_total_users',
+    TODAY_VISITS: 'id_formatter_today_visits',
+    TODAY_USERS: 'id_formatter_today_users',
+    LAST_VISIT_DATE: 'id_formatter_last_visit_date',
+    USER_ID: 'id_formatter_user_id'
+};
+
+// 生成或获取用户ID (使用指纹识别)
+function getUserId() {
+    let userId = localStorage.getItem(STATS_KEYS.USER_ID);
+    if (!userId) {
+        // 生成唯一ID
+        userId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+        localStorage.setItem(STATS_KEYS.USER_ID, userId);
+    }
+    return userId;
+}
+
+// 记录今日访问的用户
+function trackTodayUser(userId, dateStr) {
+    let todayUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TODAY_USERS) || '{}');
+
+    // 如果日期变了，重置今日用户
+    if (todayUsers.date !== dateStr) {
+        todayUsers = { date: dateStr, users: {} };
+    }
+
+    // 添加当前用户
+    todayUsers.users[userId] = true;
+
+    // 保存
+    localStorage.setItem(STATS_KEYS.TODAY_USERS, JSON.stringify(todayUsers));
+
+    return Object.keys(todayUsers.users).length;
+}
+
+// 记录累计访问的用户
+function trackTotalUser(userId) {
+    let totalUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TOTAL_USERS) || '[]');
+
+    if (!totalUsers.includes(userId)) {
+        totalUsers.push(userId);
+        localStorage.setItem(STATS_KEYS.TOTAL_USERS, JSON.stringify(totalUsers));
+    }
+
+    return totalUsers.length;
+}
+
+// 获取今日日期字符串
+function getTodayDateString() {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+}
+
+// 初始化/更新统计数据
+function initStats() {
+    const todayStr = getTodayDateString();
+    const lastVisitDate = localStorage.getItem(STATS_KEYS.LAST_VISIT_DATE);
+
+    // 如果是新的一天，重置今日计数
+    if (lastVisitDate !== todayStr) {
+        localStorage.setItem(STATS_KEYS.LAST_VISIT_DATE, todayStr);
+        localStorage.setItem(STATS_KEYS.TODAY_VISITS, '0');
+
+        // 重置今日用户记录
+        let todayUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TODAY_USERS) || '{}');
+        todayUsers = { date: todayStr, users: {} };
+        localStorage.setItem(STATS_KEYS.TODAY_USERS, JSON.stringify(todayUsers));
+    }
+
+    updateStatsDisplay();
+}
+
+// 更新统计显示
+function updateStatsDisplay() {
+    const totalVisits = parseInt(localStorage.getItem(STATS_KEYS.TOTAL_VISITS) || '0');
+    const todayVisits = parseInt(localStorage.getItem(STATS_KEYS.TODAY_VISITS) || '0');
+    const totalUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TOTAL_USERS) || '[]').length;
+
+    // 获取今日用户数
+    let todayUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TODAY_USERS) || '{}');
+    const todayUserCount = todayUsers.users ? Object.keys(todayUsers.users).length : 0;
+
+    document.getElementById('totalVisits').textContent = totalVisits;
+    document.getElementById('totalUsers').textContent = totalUsers;
+    document.getElementById('todayVisits').textContent = todayVisits;
+    document.getElementById('todayUsers').textContent = todayUserCount;
+}
+
+// 追踪访问（按钮点击）
+function trackVisit(callback) {
+    const userId = getUserId();
+    const todayStr = getTodayDateString();
+
+    // 更新累计访问次数
+    let totalVisits = parseInt(localStorage.getItem(STATS_KEYS.TOTAL_VISITS) || '0');
+    totalVisits++;
+    localStorage.setItem(STATS_KEYS.TOTAL_VISITS, totalVisits.toString());
+
+    // 更新今日访问次数
+    let todayVisits = parseInt(localStorage.getItem(STATS_KEYS.TODAY_VISITS) || '0');
+    todayVisits++;
+    localStorage.setItem(STATS_KEYS.TODAY_VISITS, todayVisits.toString());
+
+    // 记录用户
+    trackTotalUser(userId);
+    const todayUserCount = trackTodayUser(userId, todayStr);
+
+    // 更新显示
+    updateStatsDisplay();
+
+    // 执行原始回调
+    if (callback && typeof callback === 'function') {
+        callback();
+    }
+}
+
+// ==================== 原有功能模块 ====================
+
 // 显示消息
 function showMessage(msg, type) {
     const el = document.getElementById('message');
@@ -480,9 +674,10 @@ document.getElementById('inputBox').addEventListener('input', function() {
     updateStats(arr.length, this.value.length);
 });
 
-// 页面加载动画
+// 页面加载时初始化统计
 window.addEventListener('load', function() {
     document.body.style.opacity = '1';
+    initStats();
 });
 </script>
 </body>
