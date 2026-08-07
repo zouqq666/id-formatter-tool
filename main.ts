@@ -104,6 +104,33 @@ async function trackVisit(userId: string) {
   };
 }
 
+// ---------- Reset all stats ----------
+async function resetStats() {
+  const kv = await getKv();
+  const today = getTodayShanghai();
+
+  // 1. Reset counters
+  await kv.atomic()
+    .set(["stats", "totalVisits"], 0)
+    .set(["stats", "totalUsers"], 0)
+    .set(["stats", "todayVisits"], 0)
+    .set(["stats", "todayUsers"], 0)
+    .set(["stats", "lastDate"], today)
+    .commit();
+
+  // 2. Delete all user dedup records (allUsers prefix)
+  for await (const entry of kv.list({ prefix: ["allUsers"] })) {
+    await kv.delete(entry.key);
+  }
+
+  // 3. Delete all daily user dedup records (dailyUsers prefix)
+  for await (const entry of kv.list({ prefix: ["dailyUsers"] })) {
+    await kv.delete(entry.key);
+  }
+
+  return { totalVisits: 0, totalUsers: 0, todayVisits: 0, todayUsers: 0 };
+}
+
 // ---------- HTTP server ----------
 Deno.serve(async (req: Request) => {
   try {
@@ -136,6 +163,11 @@ Deno.serve(async (req: Request) => {
       const userId = (body.userId as string) || crypto.randomUUID();
       const data = await trackVisit(userId);
       return jsonResponse({ success: true, data });
+    }
+
+    if (path === "/api/reset" && req.method === "POST") {
+      const data = await resetStats();
+      return jsonResponse({ success: true, data, message: "All stats reset to 0" });
     }
 
     return jsonResponse({ success: false, error: "Not found" }, 404);
