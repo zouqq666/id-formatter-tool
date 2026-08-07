@@ -32,14 +32,8 @@ body {
 }
 
 @keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(-20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .header {
@@ -59,7 +53,25 @@ body {
     font-size: 14px;
 }
 
-/* 访问统计样式 */
+.mode-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 10px;
+    margin-top: 8px;
+    font-weight: 500;
+}
+
+.mode-badge.online {
+    background: #c6f6d5;
+    color: #22543d;
+}
+
+.mode-badge.offline {
+    background: #feebc8;
+    color: #744210;
+}
+
 .stats-bar {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
     border-radius: 12px;
@@ -101,6 +113,16 @@ body {
 
 .stat-value.today {
     color: #48bb78;
+}
+
+.stat-value.loading {
+    opacity: 0.5;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
 }
 
 .section-title {
@@ -255,14 +277,8 @@ textarea::placeholder {
 }
 
 @keyframes slideIn {
-    from {
-        opacity: 0;
-        transform: translateX(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
+    from { opacity: 0; transform: translateX(-10px); }
+    to { opacity: 1; transform: translateX(0); }
 }
 
 .message.success {
@@ -278,7 +294,7 @@ textarea::placeholder {
 }
 
 .message::before {
-    content: '✓';
+    content: '\2713';
     font-weight: bold;
     margin-right: 8px;
 }
@@ -307,42 +323,21 @@ textarea::placeholder {
 }
 
 @media (max-width: 600px) {
-    .container {
-        padding: 20px;
-    }
-
-    .header h1 {
-        font-size: 22px;
-    }
-
-    .button-group {
-        flex-direction: column;
-    }
-
-    .button {
-        width: 100%;
-        justify-content: center;
-    }
-
-    .quote-options {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
-    }
-
-    .stats-bar {
-        flex-direction: column;
-        align-items: stretch;
-        padding: 8px 10px;
-    }
+    .container { padding: 20px; }
+    .header h1 { font-size: 22px; }
+    .button-group { flex-direction: column; }
+    .button { width: 100%; justify-content: center; }
+    .quote-options { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .stats-bar { flex-direction: column; align-items: stretch; padding: 8px 10px; }
 }
 </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        <h1>📦 ID 格式化工具</h1>
+        <h1>ID 格式化工具</h1>
         <p>快速转换和格式化您的ID列表</p>
+        <span class="mode-badge offline" id="modeBadge">检测中...</span>
     </div>
 
     <div class="section-title">输入ID（换行/逗号/空格分隔）</div>
@@ -372,18 +367,10 @@ textarea::placeholder {
     </div>
 
     <div class="button-group">
-        <button class="button button-primary" onclick="trackVisit(forward)">
-            <span>🔄</span> 正向拼接
-        </button>
-        <button class="button button-secondary" onclick="trackVisit(reverse)">
-            <span>⬅️</span> 反向拆分
-        </button>
-        <button class="button button-secondary" onclick="trackVisit(distinct)">
-            <span>🔍</span> 去除重复
-        </button>
-        <button class="button button-secondary" onclick="trackVisit(clearAll)">
-            <span>🗑️</span> 清空全部
-        </button>
+        <button class="button button-primary" onclick="trackVisit(forward)">正向拼接</button>
+        <button class="button button-secondary" onclick="trackVisit(reverse)">反向拆分</button>
+        <button class="button button-secondary" onclick="trackVisit(distinct)">去除重复</button>
+        <button class="button button-secondary" onclick="trackVisit(clearAll)">清空全部</button>
     </div>
 
     <div class="output-section">
@@ -396,288 +383,338 @@ textarea::placeholder {
     </div>
 
     <div class="button-group" style="margin-top: 20px;">
-        <button class="button button-success" onclick="trackVisit(copy)">
-            <span>📋</span> 复制结果
-        </button>
+        <button class="button button-success" onclick="trackVisit(copy)">复制结果</button>
     </div>
 
-    <!-- 访问统计 -->
     <div class="stats-bar">
         <div class="stat-item">
             <div class="stat-label">累计访问次数</div>
-            <div class="stat-value total" id="totalVisits">0</div>
+            <div class="stat-value total loading" id="totalVisits">--</div>
         </div>
         <div class="stat-item">
             <div class="stat-label">累计访问人数</div>
-            <div class="stat-value" id="totalUsers">0</div>
+            <div class="stat-value loading" id="totalUsers">--</div>
         </div>
         <div class="stat-item">
             <div class="stat-label">今日访问次数</div>
-            <div class="stat-value today" id="todayVisits">0</div>
+            <div class="stat-value today loading" id="todayVisits">--</div>
         </div>
         <div class="stat-item">
             <div class="stat-label">今日访问人数</div>
-            <div class="stat-value today" id="todayUsers">0</div>
+            <div class="stat-value today loading" id="todayUsers">--</div>
         </div>
     </div>
 </div>
 
 <script>
-// ==================== 访问统计模块 ====================
+// ============================================================
+// 跨设备统计模块 — CounterAPI + localStorage 降级
+// ============================================================
 
-// 统计数据的key
-const STATS_KEYS = {
+var COUNTER_NS = 'zouqq666-id-formatter';
+var COUNTER_API = 'https://api.counterapi.dev/v1';
+
+var USER_ID_KEY = 'id_formatter_user_id';
+var LS_COUNTED_TOTAL = 'id_formatter_counted_total';
+var LS_COUNTED_DATE = 'id_formatter_counted_date';
+
+var LS_KEYS = {
     TOTAL_VISITS: 'id_formatter_total_visits',
     TOTAL_USERS: 'id_formatter_total_users',
     TODAY_VISITS: 'id_formatter_today_visits',
     TODAY_USERS: 'id_formatter_today_users',
-    LAST_VISIT_DATE: 'id_formatter_last_visit_date',
-    USER_ID: 'id_formatter_user_id'
+    LAST_DATE: 'id_formatter_last_visit_date'
 };
 
-// 生成或获取用户ID (使用指纹识别)
+var statsMode = 'offline';
+var todayStr = '';
+
+function getTodayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 function getUserId() {
-    let userId = localStorage.getItem(STATS_KEYS.USER_ID);
+    var userId = localStorage.getItem(USER_ID_KEY);
     if (!userId) {
-        // 生成唯一ID
-        userId = Date.now().toString(36) + Math.random().toString(36).substr(2);
-        localStorage.setItem(STATS_KEYS.USER_ID, userId);
+        userId = Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem(USER_ID_KEY, userId);
     }
     return userId;
 }
 
-// 记录今日访问的用户
-function trackTodayUser(userId, dateStr) {
-    let todayUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TODAY_USERS) || '{}');
+// ---------- CounterAPI 请求 ----------
 
-    // 如果日期变了，重置今日用户
-    if (todayUsers.date !== dateStr) {
-        todayUsers = { date: dateStr, users: {} };
+function counterGet(key) {
+    return fetch(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/')
+        .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        })
+        .then(function(data) { return (data && data.count !== undefined) ? data.count : 0; });
+}
+
+function counterUp(key) {
+    return fetch(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/up')
+        .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        })
+        .then(function(data) { return (data && data.count !== undefined) ? data.count : 0; });
+}
+
+// ---------- 显示层 ----------
+
+function setStatsLoading(loading) {
+    var ids = ['totalVisits', 'totalUsers', 'todayVisits', 'todayUsers'];
+    for (var i = 0; i < ids.length; i++) {
+        var el = document.getElementById(ids[i]);
+        if (loading) {
+            el.classList.add('loading');
+            el.textContent = '--';
+        } else {
+            el.classList.remove('loading');
+        }
     }
-
-    // 添加当前用户
-    todayUsers.users[userId] = true;
-
-    // 保存
-    localStorage.setItem(STATS_KEYS.TODAY_USERS, JSON.stringify(todayUsers));
-
-    return Object.keys(todayUsers.users).length;
 }
 
-// 记录累计访问的用户
-function trackTotalUser(userId) {
-    let totalUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TOTAL_USERS) || '[]');
+function updateStatsDisplay(data) {
+    if (!data) return;
+    if (data.totalVisits !== undefined) document.getElementById('totalVisits').textContent = data.totalVisits;
+    if (data.totalUsers !== undefined) document.getElementById('totalUsers').textContent = data.totalUsers;
+    if (data.todayVisits !== undefined) document.getElementById('todayVisits').textContent = data.todayVisits;
+    if (data.todayUsers !== undefined) document.getElementById('todayUsers').textContent = data.todayUsers;
+}
 
-    if (!totalUsers.includes(userId)) {
-        totalUsers.push(userId);
-        localStorage.setItem(STATS_KEYS.TOTAL_USERS, JSON.stringify(totalUsers));
+function setMode(mode) {
+    statsMode = mode;
+    var badge = document.getElementById('modeBadge');
+    if (!badge) return;
+    if (mode === 'online') {
+        badge.className = 'mode-badge online';
+        badge.textContent = '跨设备统计';
+    } else {
+        badge.className = 'mode-badge offline';
+        badge.textContent = '本地统计';
     }
-
-    return totalUsers.length;
 }
 
-// 获取今日日期字符串
-function getTodayDateString() {
-    const today = new Date();
-    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+// ---------- 在线模式 ----------
+
+function fetchStatsOnline() {
+    todayStr = getTodayStr();
+    counterGet('total-visits')
+        .then(function(totalVisits) {
+            setMode('online');
+            Promise.all([
+                counterGet('total-users').catch(function() { return 0; }),
+                counterGet('visits-' + todayStr).catch(function() { return 0; }),
+                counterGet('users-' + todayStr).catch(function() { return 0; })
+            ]).then(function(results) {
+                updateStatsDisplay({
+                    totalVisits: totalVisits,
+                    totalUsers: results[0],
+                    todayVisits: results[1],
+                    todayUsers: results[2]
+                });
+                setStatsLoading(false);
+            });
+        })
+        .catch(function() {
+            fetchStatsLS();
+        });
 }
 
-// 初始化/更新统计数据
-function initStats() {
-    const todayStr = getTodayDateString();
-    const lastVisitDate = localStorage.getItem(STATS_KEYS.LAST_VISIT_DATE);
+function trackVisitOnline() {
+    todayStr = getTodayStr();
+    counterUp('total-visits')
+        .then(function(count) {
+            document.getElementById('totalVisits').textContent = count;
+            setMode('online');
 
-    // 如果是新的一天，重置今日计数
-    if (lastVisitDate !== todayStr) {
-        localStorage.setItem(STATS_KEYS.LAST_VISIT_DATE, todayStr);
-        localStorage.setItem(STATS_KEYS.TODAY_VISITS, '0');
+            counterUp('visits-' + todayStr).then(function(c) {
+                document.getElementById('todayVisits').textContent = c;
+            }).catch(function() {});
 
-        // 重置今日用户记录
-        let todayUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TODAY_USERS) || '{}');
-        todayUsers = { date: todayStr, users: {} };
-        localStorage.setItem(STATS_KEYS.TODAY_USERS, JSON.stringify(todayUsers));
+            var countedTotal = localStorage.getItem(LS_COUNTED_TOTAL);
+            if (!countedTotal) {
+                counterUp('total-users').then(function(c) {
+                    document.getElementById('totalUsers').textContent = c;
+                    localStorage.setItem(LS_COUNTED_TOTAL, '1');
+                }).catch(function() {});
+            }
+
+            var countedDate = localStorage.getItem(LS_COUNTED_DATE);
+            if (countedDate !== todayStr) {
+                counterUp('users-' + todayStr).then(function(c) {
+                    document.getElementById('todayUsers').textContent = c;
+                    localStorage.setItem(LS_COUNTED_DATE, todayStr);
+                }).catch(function() {});
+            }
+        })
+        .catch(function() {
+            setMode('offline');
+            trackVisitLS();
+        });
+}
+
+// ---------- 离线模式（localStorage 降级） ----------
+
+function checkDailyResetLS() {
+    var today = getTodayStr();
+    var lastDate = localStorage.getItem(LS_KEYS.LAST_DATE);
+    if (lastDate !== today) {
+        localStorage.setItem(LS_KEYS.LAST_DATE, today);
+        localStorage.setItem(LS_KEYS.TODAY_VISITS, '0');
+        localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify({ date: today, users: {} }));
     }
-
-    updateStatsDisplay();
 }
 
-// 更新统计显示
-function updateStatsDisplay() {
-    const totalVisits = parseInt(localStorage.getItem(STATS_KEYS.TOTAL_VISITS) || '0');
-    const todayVisits = parseInt(localStorage.getItem(STATS_KEYS.TODAY_VISITS) || '0');
-    const totalUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TOTAL_USERS) || '[]').length;
-
-    // 获取今日用户数
-    let todayUsers = JSON.parse(localStorage.getItem(STATS_KEYS.TODAY_USERS) || '{}');
-    const todayUserCount = todayUsers.users ? Object.keys(todayUsers.users).length : 0;
-
-    document.getElementById('totalVisits').textContent = totalVisits;
-    document.getElementById('totalUsers').textContent = totalUsers;
-    document.getElementById('todayVisits').textContent = todayVisits;
-    document.getElementById('todayUsers').textContent = todayUserCount;
+function fetchStatsLS() {
+    checkDailyResetLS();
+    var totalVisits = parseInt(localStorage.getItem(LS_KEYS.TOTAL_VISITS) || '0');
+    var todayVisits = parseInt(localStorage.getItem(LS_KEYS.TODAY_VISITS) || '0');
+    var totalUsers = JSON.parse(localStorage.getItem(LS_KEYS.TOTAL_USERS) || '[]');
+    var todayUsers = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
+    var todayUserCount = todayUsers.users ? Object.keys(todayUsers.users).length : 0;
+    updateStatsDisplay({
+        totalVisits: totalVisits,
+        totalUsers: totalUsers.length,
+        todayVisits: todayVisits,
+        todayUsers: todayUserCount
+    });
+    setStatsLoading(false);
+    setMode('offline');
 }
 
-// 追踪访问（按钮点击）
-function trackVisit(callback) {
-    const userId = getUserId();
-    const todayStr = getTodayDateString();
+function trackVisitLS() {
+    checkDailyResetLS();
+    var userId = getUserId();
 
-    // 更新累计访问次数
-    let totalVisits = parseInt(localStorage.getItem(STATS_KEYS.TOTAL_VISITS) || '0');
+    var totalVisits = parseInt(localStorage.getItem(LS_KEYS.TOTAL_VISITS) || '0');
     totalVisits++;
-    localStorage.setItem(STATS_KEYS.TOTAL_VISITS, totalVisits.toString());
+    localStorage.setItem(LS_KEYS.TOTAL_VISITS, String(totalVisits));
 
-    // 更新今日访问次数
-    let todayVisits = parseInt(localStorage.getItem(STATS_KEYS.TODAY_VISITS) || '0');
+    var todayVisits = parseInt(localStorage.getItem(LS_KEYS.TODAY_VISITS) || '0');
     todayVisits++;
-    localStorage.setItem(STATS_KEYS.TODAY_VISITS, todayVisits.toString());
+    localStorage.setItem(LS_KEYS.TODAY_VISITS, String(todayVisits));
 
-    // 记录用户
-    trackTotalUser(userId);
-    const todayUserCount = trackTodayUser(userId, todayStr);
+    var totalUsers = JSON.parse(localStorage.getItem(LS_KEYS.TOTAL_USERS) || '[]');
+    if (totalUsers.indexOf(userId) === -1) {
+        totalUsers.push(userId);
+        localStorage.setItem(LS_KEYS.TOTAL_USERS, JSON.stringify(totalUsers));
+    }
 
-    // 更新显示
-    updateStatsDisplay();
+    var todayUsers = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
+    if (!todayUsers.users) todayUsers.users = {};
+    todayUsers.users[userId] = true;
+    localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify(todayUsers));
 
-    // 执行原始回调
+    fetchStatsLS();
+}
+
+// ---------- 统一入口 ----------
+
+function fetchStats() {
+    setStatsLoading(true);
+    fetchStatsOnline();
+}
+
+function trackVisit(callback) {
     if (callback && typeof callback === 'function') {
         callback();
     }
+    trackVisitOnline();
 }
 
-// ==================== 原有功能模块 ====================
+// ============================================================
+// 格式化功能模块
+// ============================================================
 
-// 显示消息
 function showMessage(msg, type) {
-    const el = document.getElementById('message');
+    var el = document.getElementById('message');
     el.textContent = msg;
     el.className = 'message ' + type;
-    setTimeout(() => {
-        el.className = 'message';
-    }, 3000);
+    setTimeout(function() { el.className = 'message'; }, 3000);
 }
 
-// 更新统计信息
 function updateStats(count, length) {
     document.getElementById('countDisplay').textContent = count;
     document.getElementById('lengthDisplay').textContent = length;
 }
 
-// 获取引号类型
 function getQuote() {
-    const selected = document.querySelector('input[name="quote"]:checked');
+    var selected = document.querySelector('input[name="quote"]:checked');
     return selected ? selected.value : "'";
 }
 
-// 清洗分割文本
 function splitText(str) {
-    return str.trim().split(/[\n\r, ]+/).map(s => s.trim()).filter(s => s);
+    return str.trim().split(/[\n\r, ]+/).map(function(s) { return s.trim(); }).filter(function(s) { return s; });
 }
 
-// 正向拼接
 function forward() {
-    const input = document.getElementById('inputBox');
-    const inputText = input.value;
-
-    if (!inputText.trim()) {
-        showMessage('请输入数字ID', 'error');
-        return;
-    }
-
-    const arr = splitText(inputText);
-    const quote = getQuote();
-    const result = arr.map(id => quote + id + quote).join(',');
-
+    var inputText = document.getElementById('inputBox').value;
+    if (!inputText.trim()) { showMessage('请输入数字ID', 'error'); return; }
+    var arr = splitText(inputText);
+    var quote = getQuote();
+    var result = arr.map(function(id) { return quote + id + quote; }).join(',');
     document.getElementById('outputBox').value = result;
     updateStats(arr.length, result.length);
-    showMessage(`✓ 转换完成！共 ${arr.length} 个ID`, 'success');
-
-    // 滚动到结果区域
-    document.querySelector('.output-section').scrollIntoView({
-        behavior: 'smooth',
-        block: 'near'
-    });
+    showMessage('\u2713 转换完成！共 ' + arr.length + ' 个ID', 'success');
+    document.querySelector('.output-section').scrollIntoView({ behavior: 'smooth', block: 'near' });
 }
 
-// 反向拆分
 function reverse() {
-    const input = document.getElementById('inputBox');
-    const inputText = input.value;
-
-    if (!inputText.trim()) {
-        showMessage('请输入带符号的字符串', 'error');
-        return;
-    }
-
-    const cleanText = inputText.replace(/['"]/g, '');
-    const arr = splitText(cleanText);
-    const result = arr.join('\n');
-
+    var inputText = document.getElementById('inputBox').value;
+    if (!inputText.trim()) { showMessage('请输入带符号的字符串', 'error'); return; }
+    var cleanText = inputText.replace(/['"]/g, '');
+    var arr = splitText(cleanText);
+    var result = arr.join('\n');
     document.getElementById('outputBox').value = result;
     updateStats(arr.length, result.length);
-    showMessage(`✓ 拆分完成！共 ${arr.length} 个ID`, 'success');
+    showMessage('\u2713 拆分完成！共 ' + arr.length + ' 个ID', 'success');
 }
 
-// 去重
 function distinct() {
-    const input = document.getElementById('inputBox');
-    const inputText = input.value;
-    const arr = splitText(inputText);
-    const unique = [...new Set(arr)];
-
-    input.value = unique.join('\n');
-    const removed = arr.length - unique.length;
-    updateStats(unique.length, input.value.length);
-
-    if (removed > 0) {
-        showMessage(`✓ 已去除 ${removed} 个重复ID`, 'success');
-    } else {
-        showMessage('✓ 没有重复ID', 'success');
+    var input = document.getElementById('inputBox');
+    var arr = splitText(input.value);
+    var seen = {}, unique = [];
+    for (var i = 0; i < arr.length; i++) {
+        if (!seen[arr[i]]) { seen[arr[i]] = true; unique.push(arr[i]); }
     }
+    input.value = unique.join('\n');
+    var removed = arr.length - unique.length;
+    updateStats(unique.length, input.value.length);
+    showMessage(removed > 0 ? '\u2713 已去除 ' + removed + ' 个重复ID' : '\u2713 没有重复ID', 'success');
 }
 
-// 清空
 function clearAll() {
     document.getElementById('inputBox').value = '';
     document.getElementById('outputBox').value = '';
     updateStats(0, 0);
-    showMessage('✓ 已清空所有内容', 'error');
+    showMessage('\u2713 已清空所有内容', 'error');
 }
 
-// 复制
 function copy() {
-    const output = document.getElementById('outputBox');
-
-    if (!output.value) {
-        showMessage('暂无转换内容', 'error');
-        return;
-    }
-
-    // 选择文本
+    var output = document.getElementById('outputBox');
+    if (!output.value) { showMessage('暂无转换内容', 'error'); return; }
     output.select();
     output.setSelectionRange(0, 99999);
-
-    // 尝试复制
     navigator.clipboard.writeText(output.value)
-        .then(() => {
-            showMessage('✓ 已复制到剪贴板', 'success');
-        })
-        .catch(() => {
+        .then(function() { showMessage('\u2713 已复制到剪贴板', 'success'); })
+        .catch(function() {
             document.execCommand('copy');
-            showMessage('✓ 已复制到剪贴板', 'success');
+            showMessage('\u2713 已复制到剪贴板', 'success');
         });
 }
 
-// 监听输入变化，实时更新统计
 document.getElementById('inputBox').addEventListener('input', function() {
-    const arr = splitText(this.value);
+    var arr = splitText(this.value);
     updateStats(arr.length, this.value.length);
 });
 
-// 页面加载时初始化统计
 window.addEventListener('load', function() {
-    document.body.style.opacity = '1';
-    initStats();
+    fetchStats();
 });
 </script>
 </body>
