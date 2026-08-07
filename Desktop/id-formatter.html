@@ -406,6 +406,32 @@ textarea::placeholder {
     </div>
 </div>
 
+<!-- 内联脚本：在主脚本之前同步填充缓存数据，彻底消除 "--" 闪烁 -->
+<script>
+(function() {
+    try {
+        var raw = localStorage.getItem('id_formatter_cached_stats');
+        if (!raw) return;
+        var d = JSON.parse(raw);
+        if (d && d.totalVisits !== undefined) {
+            var map = {
+                totalVisits: d.totalVisits,
+                totalUsers: d.totalUsers,
+                todayVisits: d.todayVisits,
+                todayUsers: d.todayUsers
+            };
+            for (var id in map) {
+                var el = document.getElementById(id);
+                if (el) {
+                    el.textContent = map[id];
+                    el.classList.remove('loading');
+                }
+            }
+        }
+    } catch (e) {}
+})();
+</script>
+
 <script>
 // ============================================================
 // 跨设备统计模块 — Cloudflare Worker + KV 存储
