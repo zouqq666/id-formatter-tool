@@ -406,7 +406,12 @@ textarea::placeholder {
     </div>
 </div>
 
-<!-- 内联脚本：在主脚本之前同步填充缓存数据，彻底消除 "--" 闪烁 -->
+<!-- 不蒜子统计：跨设备累计访问统计（无需后端，国内可访问） -->
+<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
+<span id="busuanzi_container_site_pv" style="display:none"><span id="busuanzi_value_site_pv"></span></span>
+<span id="busuanzi_container_site_uv" style="display:none"><span id="busuanzi_value_site_uv"></span></span>
+
+<!-- 内联脚本：在主脚本之前同步填充缓存数据，彻底消除刷新闪烁 -->
 <script>
 (function() {
     try {
@@ -434,30 +439,22 @@ textarea::placeholder {
 
 <script>
 // ============================================================
-// 跨设备统计模块 — Deno Deploy + Deno KV 存储
-// API 不可用时自动降级到 localStorage
+// 跨设备统计模块 — 不蒜子(busuanzi) + localStorage 混合
+// 累计统计：不蒜子（跨设备，免费，无需后端）
+// 今日统计：localStorage（本设备）
 // ============================================================
 
-// Deno Deploy API 地址
-var API_BASE = 'https://id-formatter-stats.deno.dev';
-
-// 用户唯一标识（仅存 userId，不存统计数据）
 var USER_ID_KEY = 'id_formatter_user_id';
-
-// localStorage 降级用的 key
+var CACHE_KEY = 'id_formatter_cached_stats';
 var LS_KEYS = {
-    TOTAL_VISITS: 'id_formatter_total_visits',
-    TOTAL_USERS: 'id_formatter_total_users',
     TODAY_VISITS: 'id_formatter_today_visits',
     TODAY_USERS: 'id_formatter_today_users',
     LAST_DATE: 'id_formatter_last_visit_date'
 };
 
-// 缓存最近一次的统计数据（避免刷新时的 loading 闪烁）
-var CACHE_KEY = 'id_formatter_cached_stats';
-
 var statsMode = 'offline';
-var hasShownData = false;  // 标记是否已经显示了数据
+var hasShownData = false;
+var busuanziLoaded = false;
 
 // ---------- 工具函数 ----------
 
@@ -475,32 +472,10 @@ function getUserId() {
     return userId;
 }
 
-// 带超时的 fetch（5 秒）
-function fetchWithTimeout(url, options) {
-    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    var timer = setTimeout(function() {
-        if (controller) controller.abort();
-    }, 5000);
-    var opts = options || {};
-    if (controller) opts.signal = controller.signal;
-    return fetch(url, opts).finally(function() {
-        clearTimeout(timer);
-    });
-}
-
 // ---------- 显示层 ----------
 
 function setStatsLoading(loading) {
-    var ids = ['totalVisits', 'totalUsers', 'todayVisits', 'todayUsers'];
-    for (var i = 0; i < ids.length; i++) {
-        var el = document.getElementById(ids[i]);
-        if (loading) {
-            el.classList.add('loading');
-            el.textContent = '0';
-        } else {
-            el.classList.remove('loading');
-        }
-    }
+    // 不使用 loading 状态，直接显示数字
 }
 
 function updateStatsDisplay(data) {
@@ -533,7 +508,6 @@ function loadCachedStats() {
         var data = JSON.parse(raw);
         if (!data) return false;
         updateStatsDisplay(data);
-        setStatsLoading(false);
         hasShownData = true;
         return true;
     } catch (e) {
@@ -553,60 +527,7 @@ function saveCachedStats(data) {
     } catch (e) {}
 }
 
-// ---------- 在线模式（Cloudflare Worker） ----------
-
-function fetchStatsOnline() {
-    fetchWithTimeout(API_BASE + '/api/stats')
-        .then(function(resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return resp.json();
-        })
-        .then(function(json) {
-            if (json.success && json.data) {
-                setMode('online');
-                updateStatsDisplay(json.data);
-                setStatsLoading(false);
-                saveCachedStats(json.data);
-                hasShownData = true;
-            } else {
-                throw new Error(json.error || 'unknown');
-            }
-        })
-        .catch(function() {
-            // 降级到 localStorage
-            fetchStatsLS();
-        });
-}
-
-function trackVisitOnline() {
-    var userId = getUserId();
-    fetchWithTimeout(API_BASE + '/api/track', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: userId })
-    })
-        .then(function(resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return resp.json();
-        })
-        .then(function(json) {
-            if (json.success && json.data) {
-                setMode('online');
-                updateStatsDisplay(json.data);
-                saveCachedStats(json.data);
-                hasShownData = true;
-            } else {
-                throw new Error(json.error || 'unknown');
-            }
-        })
-        .catch(function() {
-            // 降级到 localStorage
-            setMode('offline');
-            trackVisitLS();
-        });
-}
-
-// ---------- 离线模式（localStorage 降级） ----------
+// ---------- 今日统计（localStorage，本设备） ----------
 
 function checkDailyResetLS() {
     var today = getTodayStr();
@@ -614,71 +535,109 @@ function checkDailyResetLS() {
     if (lastDate !== today) {
         localStorage.setItem(LS_KEYS.LAST_DATE, today);
         localStorage.setItem(LS_KEYS.TODAY_VISITS, '0');
-        localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify({ date: today, users: {} }));
+        localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify({}));
     }
 }
 
-function fetchStatsLS() {
+function getTodayStats() {
     checkDailyResetLS();
-    var totalVisits = parseInt(localStorage.getItem(LS_KEYS.TOTAL_VISITS) || '0');
     var todayVisits = parseInt(localStorage.getItem(LS_KEYS.TODAY_VISITS) || '0');
-    var totalUsers = JSON.parse(localStorage.getItem(LS_KEYS.TOTAL_USERS) || '[]');
-    var todayUsers = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
-    var todayUserCount = todayUsers.users ? Object.keys(todayUsers.users).length : 0;
-    updateStatsDisplay({
-        totalVisits: totalVisits,
-        totalUsers: totalUsers.length,
-        todayVisits: todayVisits,
-        todayUsers: todayUserCount
-    });
-    setStatsLoading(false);
-    setMode('offline');
+    var todayUsersRaw = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
+    var todayUserCount = Object.keys(todayUsersRaw).length;
+    return { todayVisits: todayVisits, todayUsers: todayUserCount };
 }
 
-function trackVisitLS() {
+function trackTodayVisit() {
     checkDailyResetLS();
     var userId = getUserId();
-
-    var totalVisits = parseInt(localStorage.getItem(LS_KEYS.TOTAL_VISITS) || '0');
-    totalVisits++;
-    localStorage.setItem(LS_KEYS.TOTAL_VISITS, String(totalVisits));
 
     var todayVisits = parseInt(localStorage.getItem(LS_KEYS.TODAY_VISITS) || '0');
     todayVisits++;
     localStorage.setItem(LS_KEYS.TODAY_VISITS, String(todayVisits));
 
-    var totalUsers = JSON.parse(localStorage.getItem(LS_KEYS.TOTAL_USERS) || '[]');
-    if (totalUsers.indexOf(userId) === -1) {
-        totalUsers.push(userId);
-        localStorage.setItem(LS_KEYS.TOTAL_USERS, JSON.stringify(totalUsers));
+    var todayUsersRaw = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
+    todayUsersRaw[userId] = true;
+    localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify(todayUsersRaw));
+
+    return {
+        todayVisits: todayVisits,
+        todayUsers: Object.keys(todayUsersRaw).length
+    };
+}
+
+// ---------- 不蒜子统计（跨设备累计） ----------
+
+function loadBusuanziStats(retries) {
+    retries = retries || 0;
+    var pvEl = document.getElementById('busuanzi_value_site_pv');
+    var uvEl = document.getElementById('busuanzi_value_site_uv');
+
+    if (pvEl && pvEl.textContent && uvEl && uvEl.textContent) {
+        busuanziLoaded = true;
+        var totalVisits = parseInt(pvEl.textContent) || 0;
+        var totalUsers = parseInt(uvEl.textContent) || 0;
+        setMode('online');
+
+        var todayData = getTodayStats();
+        var merged = {
+            totalVisits: totalVisits,
+            totalUsers: totalUsers,
+            todayVisits: todayData.todayVisits,
+            todayUsers: todayData.todayUsers
+        };
+        updateStatsDisplay(merged);
+        saveCachedStats(merged);
+        hasShownData = true;
+        return;
     }
 
-    var todayUsers = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
-    if (!todayUsers.users) todayUsers.users = {};
-    todayUsers.users[userId] = true;
-    localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify(todayUsers));
-
-    fetchStatsLS();
+    if (retries < 30) {
+        setTimeout(function() { loadBusuanziStats(retries + 1); }, 300);
+    } else {
+        if (!busuanziLoaded) {
+            setMode('offline');
+            var td = getTodayStats();
+            if (!hasShownData) {
+                updateStatsDisplay({
+                    totalVisits: 0,
+                    totalUsers: 0,
+                    todayVisits: td.todayVisits,
+                    todayUsers: td.todayUsers
+                });
+            }
+        }
+    }
 }
 
 // ---------- 统一入口 ----------
 
 function fetchStats() {
-    // 优先用本地缓存秒显，避免刷新时的 "--" 闪烁
-    var hasCache = loadCachedStats();
-    if (!hasCache) {
-        setStatsLoading(true);
-    }
-    fetchStatsOnline();
+    loadCachedStats();
+    loadBusuanziStats();
 }
 
 function trackVisit(callback) {
-    // 先执行格式化功能，不阻塞用户操作
     if (callback && typeof callback === 'function') {
         callback();
     }
-    // 异步上报访问记录
-    trackVisitOnline();
+    var todayData = trackTodayVisit();
+    if (busuanziLoaded) {
+        var pvEl = document.getElementById('busuanzi_value_site_pv');
+        var uvEl = document.getElementById('busuanzi_value_site_uv');
+        var merged = {
+            totalVisits: parseInt(pvEl && pvEl.textContent) || 0,
+            totalUsers: parseInt(uvEl && uvEl.textContent) || 0,
+            todayVisits: todayData.todayVisits,
+            todayUsers: todayData.todayUsers
+        };
+        updateStatsDisplay(merged);
+        saveCachedStats(merged);
+    } else {
+        updateStatsDisplay({
+            todayVisits: todayData.todayVisits,
+            todayUsers: todayData.todayUsers
+        });
+    }
 }
 
 // ============================================================
@@ -770,8 +729,10 @@ document.getElementById('inputBox').addEventListener('input', function() {
 window.addEventListener('load', function() {
     // 先显示缓存数据（无缓存则保持 HTML 中的 0）
     loadCachedStats();
-    // 上报本次访问并获取最新统计
-    trackVisitOnline();
+    // 记录今日访问（localStorage）
+    trackTodayVisit();
+    // 异步加载不蒜子累计数据
+    loadBusuanziStats();
 });
 </script>
 </body>
