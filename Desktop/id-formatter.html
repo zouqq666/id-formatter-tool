@@ -427,7 +427,11 @@ var LS_KEYS = {
     LAST_DATE: 'id_formatter_last_visit_date'
 };
 
+// 缓存最近一次的统计数据（避免刷新时的 loading 闪烁）
+var CACHE_KEY = 'id_formatter_cached_stats';
+
 var statsMode = 'offline';
+var hasShownData = false;  // 标记是否已经显示了数据
 
 // ---------- 工具函数 ----------
 
@@ -494,6 +498,35 @@ function setMode(mode) {
     }
 }
 
+// ---------- 缓存层（避免刷新闪烁） ----------
+
+function loadCachedStats() {
+    try {
+        var raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return false;
+        var data = JSON.parse(raw);
+        if (!data) return false;
+        updateStatsDisplay(data);
+        setStatsLoading(false);
+        hasShownData = true;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function saveCachedStats(data) {
+    try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({
+            totalVisits: data.totalVisits,
+            totalUsers: data.totalUsers,
+            todayVisits: data.todayVisits,
+            todayUsers: data.todayUsers,
+            ts: Date.now()
+        }));
+    } catch (e) {}
+}
+
 // ---------- 在线模式（Cloudflare Worker） ----------
 
 function fetchStatsOnline() {
@@ -507,6 +540,8 @@ function fetchStatsOnline() {
                 setMode('online');
                 updateStatsDisplay(json.data);
                 setStatsLoading(false);
+                saveCachedStats(json.data);
+                hasShownData = true;
             } else {
                 throw new Error(json.error || 'unknown');
             }
@@ -532,6 +567,8 @@ function trackVisitOnline() {
             if (json.success && json.data) {
                 setMode('online');
                 updateStatsDisplay(json.data);
+                saveCachedStats(json.data);
+                hasShownData = true;
             } else {
                 throw new Error(json.error || 'unknown');
             }
@@ -601,7 +638,11 @@ function trackVisitLS() {
 // ---------- 统一入口 ----------
 
 function fetchStats() {
-    setStatsLoading(true);
+    // 优先用本地缓存秒显，避免刷新时的 "--" 闪烁
+    var hasCache = loadCachedStats();
+    if (!hasCache) {
+        setStatsLoading(true);
+    }
     fetchStatsOnline();
 }
 
