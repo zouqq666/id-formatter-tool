@@ -55,8 +55,9 @@ function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-// Lookup IP location using ip-api.com (free, Chinese language)
+// Lookup IP location using ipapi.co (free, HTTPS, ~1000 req/day)
 // Results are cached in KV (["ipCache", ip]) to avoid repeated API calls
+// A 3-second timeout prevents the entire track request from hanging
 async function lookupIpLocation(
   ip: string,
 ): Promise<{ province: string; city: string } | null> {
@@ -68,21 +69,24 @@ async function lookupIpLocation(
   if (cached.value) return cached.value;
 
   try {
-    const resp = await fetch(
-      `http://ip-api.com/json/${ip}?lang=zh-CN&fields=status,regionName,city`,
-    );
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    const resp = await fetch(`https://ipapi.co/${ip}/json/`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
     const data = await resp.json();
-    if (data.status === "success" && data.regionName) {
+    if (data && !data.error && data.region) {
       const location = {
-        province: data.regionName,
-        city: data.city || data.regionName,
+        province: data.region || "Unknown",
+        city: data.city || data.region || "Unknown",
       };
       // Cache in KV for future requests
       await kv.set(["ipCache", ip], location);
       return location;
     }
   } catch (_e) {
-    // Best-effort: if lookup fails, return null
+    // Best-effort: timeout or fetch error → return null
   }
   return null;
 }
@@ -248,6 +252,7 @@ Deno.serve(async (req: Request) => {
           "/api/stats",
           "/api/track (POST)",
           "/api/locations",
+          "/api/debug-ip",
           "/api/reset (POST)",
         ],
       });
@@ -272,6 +277,19 @@ Deno.serve(async (req: Request) => {
     if (path === "/api/locations" && req.method === "GET") {
       const data = await getLocations();
       return jsonResponse({ success: true, data });
+    }
+
+    if (path === "/api/debug-ip" && req.method === "GET") {
+      const ip = getClientIp(req);
+      const location = ip ? await lookupIpLocation(ip) : null;
+      return jsonResponse({
+        success: true,
+        data: {
+          detectedIp: ip,
+          isPrivate: ip ? isPrivateIp(ip) : null,
+          location: location,
+        },
+      });
     }
 
     if (path === "/api/reset" && req.method === "POST") {
