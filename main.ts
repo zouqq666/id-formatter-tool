@@ -1,6 +1,6 @@
 // main.ts - Deno Deploy server for ID formatter stats
 // Uses Deno KV (built-in key-value store, no external database needed)
-// Accessible in China via *.deno.dev domain
+// Features: visit/user counting + IP geolocation (city-level, via ip-api.com)
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -31,6 +31,62 @@ function getKv(): Promise<Deno.Kv> {
   return kvPromise;
 }
 
+// ---------- IP geolocation helpers ----------
+
+// Extract client IP from request headers (Deno Deploy sets x-forwarded-for)
+function getClientIp(req: Request): string | null {
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) {
+    return xff.split(",")[0].trim();
+  }
+  const cf = req.headers.get("cf-connecting-ip");
+  if (cf) return cf.trim();
+  return null;
+}
+
+// Check if IP is private/local (skip geolocation for these)
+function isPrivateIp(ip: string): boolean {
+  if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
+  if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
+  if (ip.startsWith("172.")) {
+    const second = parseInt(ip.split(".")[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+// Lookup IP location using ip-api.com (free, Chinese language)
+// Results are cached in KV (["ipCache", ip]) to avoid repeated API calls
+async function lookupIpLocation(
+  ip: string,
+): Promise<{ province: string; city: string } | null> {
+  if (isPrivateIp(ip)) return null;
+  const kv = await getKv();
+
+  // Check KV cache first
+  const cached = await kv.get<{ province: string; city: string }>(["ipCache", ip]);
+  if (cached.value) return cached.value;
+
+  try {
+    const resp = await fetch(
+      `http://ip-api.com/json/${ip}?lang=zh-CN&fields=status,regionName,city`,
+    );
+    const data = await resp.json();
+    if (data.status === "success" && data.regionName) {
+      const location = {
+        province: data.regionName,
+        city: data.city || data.regionName,
+      };
+      // Cache in KV for future requests
+      await kv.set(["ipCache", ip], location);
+      return location;
+    }
+  } catch (_e) {
+    // Best-effort: if lookup fails, return null
+  }
+  return null;
+}
+
 // ---------- Read stats ----------
 async function getStats() {
   const kv = await getKv();
@@ -49,21 +105,26 @@ async function getStats() {
 }
 
 // ---------- Track visit ----------
-async function trackVisit(userId: string) {
+async function trackVisit(userId: string, req: Request) {
   const kv = await getKv();
   const today = getTodayShanghai();
 
-  const [lastDateRes, userExistsRes, todayUserExistsRes, totalsRes] = await Promise.all([
-    kv.get<string>(["stats", "lastDate"]),
-    kv.get(["allUsers", userId]),
-    kv.get(["dailyUsers", today, userId]),
-    Promise.all([
-      kv.get(["stats", "totalVisits"]),
-      kv.get(["stats", "totalUsers"]),
-      kv.get(["stats", "todayVisits"]),
-      kv.get(["stats", "todayUsers"]),
-    ]),
-  ]);
+  // Start IP location lookup in parallel (best-effort)
+  const ip = getClientIp(req);
+  const locationPromise = ip ? lookupIpLocation(ip) : Promise.resolve(null);
+
+  const [lastDateRes, userExistsRes, todayUserExistsRes, totalsRes] =
+    await Promise.all([
+      kv.get<string>(["stats", "lastDate"]),
+      kv.get(["allUsers", userId]),
+      kv.get(["dailyUsers", today, userId]),
+      Promise.all([
+        kv.get(["stats", "totalVisits"]),
+        kv.get(["stats", "totalUsers"]),
+        kv.get(["stats", "todayVisits"]),
+        kv.get(["stats", "todayUsers"]),
+      ]),
+    ]);
 
   const lastDate = lastDateRes.value;
   const userExists = userExistsRes.value !== null;
@@ -93,7 +154,25 @@ async function trackVisit(userId: string) {
 
   const result = await atomic.commit();
   if (!result.ok) {
-    return trackVisit(userId);
+    return trackVisit(userId, req);
+  }
+
+  // Update location counter (best-effort, after main commit succeeds)
+  const location = await locationPromise.catch(() => null);
+  if (location) {
+    try {
+      const locKey = ["locations", location.province, location.city] as const;
+      let committed = false;
+      for (let i = 0; i < 3 && !committed; i++) {
+        const locRes = await kv.get<number>(locKey);
+        const r = await kv.atomic()
+          .set(locKey, Number(locRes.value ?? 0) + 1)
+          .commit();
+        committed = r.ok;
+      }
+    } catch (_e) {
+      // Best-effort: if location update fails, ignore
+    }
   }
 
   return {
@@ -102,6 +181,18 @@ async function trackVisit(userId: string) {
     todayVisits: newTodayVisits,
     todayUsers: newTodayUsers,
   };
+}
+
+// ---------- Read locations ----------
+async function getLocations() {
+  const kv = await getKv();
+  const locations: Array<{ province: string; city: string; count: number }> = [];
+  for await (const entry of kv.list({ prefix: ["locations"] })) {
+    const [, province, city] = entry.key as [string, string, string];
+    locations.push({ province, city, count: Number(entry.value) });
+  }
+  locations.sort((a, b) => b.count - a.count);
+  return locations;
 }
 
 // ---------- Reset all stats ----------
@@ -118,15 +209,22 @@ async function resetStats() {
     .set(["stats", "lastDate"], today)
     .commit();
 
-  // 2. Delete all user dedup records (allUsers prefix)
+  // 2. Delete all user dedup records
   for await (const entry of kv.list({ prefix: ["allUsers"] })) {
     await kv.delete(entry.key);
   }
 
-  // 3. Delete all daily user dedup records (dailyUsers prefix)
+  // 3. Delete all daily user dedup records
   for await (const entry of kv.list({ prefix: ["dailyUsers"] })) {
     await kv.delete(entry.key);
   }
+
+  // 4. Delete all location records
+  for await (const entry of kv.list({ prefix: ["locations"] })) {
+    await kv.delete(entry.key);
+  }
+
+  // NOTE: ipCache is NOT cleared — it's a cache, not stats data
 
   return { totalVisits: 0, totalUsers: 0, todayVisits: 0, todayUsers: 0 };
 }
@@ -145,7 +243,13 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({
         success: true,
         service: "id-formatter-stats",
-        endpoints: ["/api/health", "/api/stats", "/api/track (POST)"],
+        endpoints: [
+          "/api/health",
+          "/api/stats",
+          "/api/track (POST)",
+          "/api/locations",
+          "/api/reset (POST)",
+        ],
       });
     }
 
@@ -161,13 +265,22 @@ Deno.serve(async (req: Request) => {
     if (path === "/api/track" && req.method === "POST") {
       const body = await req.json();
       const userId = (body.userId as string) || crypto.randomUUID();
-      const data = await trackVisit(userId);
+      const data = await trackVisit(userId, req);
+      return jsonResponse({ success: true, data });
+    }
+
+    if (path === "/api/locations" && req.method === "GET") {
+      const data = await getLocations();
       return jsonResponse({ success: true, data });
     }
 
     if (path === "/api/reset" && req.method === "POST") {
       const data = await resetStats();
-      return jsonResponse({ success: true, data, message: "All stats reset to 0" });
+      return jsonResponse({
+        success: true,
+        data,
+        message: "All stats reset to 0",
+      });
     }
 
     return jsonResponse({ success: false, error: "Not found" }, 404);

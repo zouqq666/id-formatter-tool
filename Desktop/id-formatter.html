@@ -84,6 +84,43 @@ body {
     border: 1px solid #dee2e6;
 }
 
+.location-bar {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 12px;
+    padding: 10px 15px;
+    margin-top: 10px;
+    border: 1px solid #dee2e6;
+}
+
+.location-title {
+    font-size: 10px;
+    color: #6c757d;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.location-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.location-tag {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 16px;
+    padding: 3px 10px;
+    font-size: 12px;
+    color: #555;
+}
+
+.location-tag .loc-count {
+    color: #667eea;
+    font-weight: 600;
+    margin-left: 4px;
+}
+
 .stat-item {
     text-align: center;
     flex: 1;
@@ -404,6 +441,11 @@ textarea::placeholder {
             <div class="stat-value today" id="todayUsers">0</div>
         </div>
     </div>
+
+    <div class="location-bar" id="locationBar" style="display:none;">
+        <div class="location-title">访客地域分布</div>
+        <div id="locationList" class="location-list"></div>
+    </div>
 </div>
 
 <!-- 内联脚本：在主脚本之前同步填充缓存数据，彻底消除刷新闪烁 -->
@@ -524,6 +566,27 @@ function saveCachedStats(data) {
 }
 
 // ---------- 在线模式（Deno Deploy） ----------
+
+function fetchLocations() {
+    fetchWithTimeout(API_BASE + '/api/locations')
+        .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        })
+        .then(function(json) {
+            if (json.success && json.data && json.data.length > 0) {
+                var bar = document.getElementById('locationBar');
+                var list = document.getElementById('locationList');
+                if (!bar || !list) return;
+                bar.style.display = 'block';
+                list.innerHTML = json.data.map(function(loc) {
+                    return '<span class="location-tag">' + loc.province + ' ' + loc.city +
+                           ' <span class="loc-count">' + loc.count + '</span></span>';
+                }).join('');
+            }
+        })
+        .catch(function() {});
+}
 
 function fetchStatsOnline() {
     fetchWithTimeout(API_BASE + '/api/stats')
@@ -677,6 +740,8 @@ window.addEventListener('load', function() {
     loadCachedStats();
     // 上报本次访问并获取最新统计（跨设备）
     trackVisitOnline();
+    // 获取访客地域分布
+    fetchLocations();
 });
 </script>
 </body>
