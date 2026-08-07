@@ -1,6 +1,9 @@
 // main.ts - Deno Deploy server for ID formatter stats
-// Uses Deno KV (built-in key-value store, no external database needed)
-// Features: visit/user counting + IP geolocation (city-level, via ip-api.com)
+// Uses TiDB Cloud Serverless (MySQL compatible) via @tidbcloud/serverless HTTP driver
+// Features: visit/user counting + IP geolocation (city-level, via ipapi.co)
+// Tables auto-created on first request (ensureTables)
+
+import { connect } from "npm:@tidbcloud/serverless";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -22,29 +25,74 @@ function getTodayShanghai(): string {
   return shanghaiTime.toISOString().slice(0, 10);
 }
 
-// Lazy KV init (deferred until first request to avoid module-load errors)
-let kvPromise: Promise<Deno.Kv> | null = null;
-function getKv(): Promise<Deno.Kv> {
-  if (!kvPromise) {
-    kvPromise = Deno.openKv();
+// ---------- Database connection (lazy init) ----------
+
+let conn: ReturnType<typeof connect> | null = null;
+
+function getConnection() {
+  if (!conn) {
+    const url = Deno.env.get("DATABASE_URL");
+    if (!url) throw new Error("DATABASE_URL is not set");
+    // fullResult: true so execute() returns { rows, rowsAffected, lastInsertId }
+    conn = connect({ url, fullResult: true });
   }
-  return kvPromise;
+  return conn;
+}
+
+// Auto-create tables on first request
+let tablesReady = false;
+async function ensureTables() {
+  if (tablesReady) return;
+  const c = getConnection();
+
+  await c.execute(`
+    CREATE TABLE IF NOT EXISTS stats (
+      stat_key VARCHAR(50) PRIMARY KEY,
+      stat_value BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  await c.execute(`
+    CREATE TABLE IF NOT EXISTS all_users (
+      user_id VARCHAR(100) PRIMARY KEY,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await c.execute(`
+    CREATE TABLE IF NOT EXISTS daily_users (
+      stat_date VARCHAR(10) NOT NULL,
+      user_id VARCHAR(100) NOT NULL,
+      PRIMARY KEY (stat_date, user_id)
+    )
+  `);
+  await c.execute(`
+    CREATE TABLE IF NOT EXISTS locations (
+      province VARCHAR(100) NOT NULL,
+      city VARCHAR(100) NOT NULL,
+      visit_count INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (province, city)
+    )
+  `);
+  await c.execute(`
+    CREATE TABLE IF NOT EXISTS ip_cache (
+      ip VARCHAR(50) PRIMARY KEY,
+      province VARCHAR(100),
+      city VARCHAR(100)
+    )
+  `);
+
+  tablesReady = true;
 }
 
 // ---------- IP geolocation helpers ----------
 
-// Extract client IP from request headers (Deno Deploy sets x-forwarded-for)
 function getClientIp(req: Request): string | null {
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) {
-    return xff.split(",")[0].trim();
-  }
+  if (xff) return xff.split(",")[0].trim();
   const cf = req.headers.get("cf-connecting-ip");
   if (cf) return cf.trim();
   return null;
 }
 
-// Check if IP is private/local (skip geolocation for these)
 function isPrivateIp(ip: string): boolean {
   if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
   if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
@@ -55,18 +103,26 @@ function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-// Lookup IP location using ipapi.co (free, HTTPS, ~1000 req/day)
-// Results are cached in KV (["ipCache", ip]) to avoid repeated API calls
-// A 3-second timeout prevents the entire track request from hanging
+// Lookup IP location using ipapi.co (HTTPS, free ~1000 req/day)
+// Results cached in ip_cache table to avoid repeated API calls
+// 3-second timeout prevents the track request from hanging
 async function lookupIpLocation(
   ip: string,
 ): Promise<{ province: string; city: string } | null> {
   if (isPrivateIp(ip)) return null;
-  const kv = await getKv();
+  const c = getConnection();
 
-  // Check KV cache first
-  const cached = await kv.get<{ province: string; city: string }>(["ipCache", ip]);
-  if (cached.value) return cached.value;
+  // Check DB cache first
+  const cached = await c.execute(
+    "SELECT province, city FROM ip_cache WHERE ip = ?",
+    [ip],
+  );
+  if (cached.rows && cached.rows.length > 0) {
+    return {
+      province: cached.rows[0].province,
+      city: cached.rows[0].city,
+    };
+  }
 
   try {
     const controller = new AbortController();
@@ -81,154 +137,169 @@ async function lookupIpLocation(
         province: data.region || "Unknown",
         city: data.city || data.region || "Unknown",
       };
-      // Cache in KV for future requests
-      await kv.set(["ipCache", ip], location);
+      // Cache in DB
+      await c.execute(
+        "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, ?, ?)",
+        [ip, location.province, location.city],
+      );
       return location;
     }
   } catch (_e) {
-    // Best-effort: timeout or fetch error → return null
+    // Best-effort: timeout or fetch error
   }
   return null;
 }
 
 // ---------- Read stats ----------
 async function getStats() {
-  const kv = await getKv();
-  const [tv, tu, toV, toU] = await Promise.all([
-    kv.get(["stats", "totalVisits"]),
-    kv.get(["stats", "totalUsers"]),
-    kv.get(["stats", "todayVisits"]),
-    kv.get(["stats", "todayUsers"]),
-  ]);
+  const c = getConnection();
+  const result = await c.execute(
+    "SELECT stat_key, stat_value FROM stats WHERE stat_key IN ('totalVisits', 'totalUsers', 'todayVisits', 'todayUsers')",
+  );
+
+  const stats: Record<string, number> = {};
+  if (result.rows) {
+    for (const row of result.rows) {
+      stats[row.stat_key] = Number(row.stat_value);
+    }
+  }
+
   return {
-    totalVisits: Number(tv.value ?? 0),
-    totalUsers: Number(tu.value ?? 0),
-    todayVisits: Number(toV.value ?? 0),
-    todayUsers: Number(toU.value ?? 0),
+    totalVisits: stats.totalVisits ?? 0,
+    totalUsers: stats.totalUsers ?? 0,
+    todayVisits: stats.todayVisits ?? 0,
+    todayUsers: stats.todayUsers ?? 0,
   };
 }
 
 // ---------- Track visit ----------
 async function trackVisit(userId: string, req: Request) {
-  const kv = await getKv();
+  const c = getConnection();
   const today = getTodayShanghai();
 
   // Start IP location lookup in parallel (best-effort)
   const ip = getClientIp(req);
   const locationPromise = ip ? lookupIpLocation(ip) : Promise.resolve(null);
 
-  const [lastDateRes, userExistsRes, todayUserExistsRes, totalsRes] =
-    await Promise.all([
-      kv.get<string>(["stats", "lastDate"]),
-      kv.get(["allUsers", userId]),
-      kv.get(["dailyUsers", today, userId]),
-      Promise.all([
-        kv.get(["stats", "totalVisits"]),
-        kv.get(["stats", "totalUsers"]),
-        kv.get(["stats", "todayVisits"]),
-        kv.get(["stats", "todayUsers"]),
-      ]),
-    ]);
+  // 1. Check and handle day reset
+  const dateResult = await c.execute(
+    "SELECT stat_value FROM stats WHERE stat_key = 'lastDate'",
+  );
+  const lastDate = dateResult.rows && dateResult.rows.length > 0
+    ? dateResult.rows[0].stat_value
+    : null;
 
-  const lastDate = lastDateRes.value;
-  const userExists = userExistsRes.value !== null;
-  const todayUserExists = todayUserExistsRes.value !== null;
-  const isNewDay = lastDate !== today;
-
-  const [tvRes, tuRes, tovRes, touRes] = totalsRes;
-  const totalVisits = Number(tvRes.value ?? 0);
-  const totalUsers = Number(tuRes.value ?? 0);
-  const todayVisits = isNewDay ? 0 : Number(tovRes.value ?? 0);
-  const todayUsers = isNewDay ? 0 : Number(touRes.value ?? 0);
-
-  const newTotalVisits = totalVisits + 1;
-  const newTodayVisits = todayVisits + 1;
-  const newTotalUsers = userExists ? totalUsers : totalUsers + 1;
-  const newTodayUsers = todayUserExists ? todayUsers : todayUsers + 1;
-
-  const atomic = kv.atomic()
-    .set(["stats", "totalVisits"], newTotalVisits)
-    .set(["stats", "todayVisits"], newTodayVisits)
-    .set(["stats", "totalUsers"], newTotalUsers)
-    .set(["stats", "todayUsers"], newTodayUsers)
-    .set(["stats", "lastDate"], today);
-
-  if (!userExists) atomic.set(["allUsers", userId], true);
-  if (!todayUserExists) atomic.set(["dailyUsers", today, userId], true);
-
-  const result = await atomic.commit();
-  if (!result.ok) {
-    return trackVisit(userId, req);
+  if (lastDate !== today) {
+    // New day: reset today's counters
+    await c.execute(
+      "INSERT INTO stats (stat_key, stat_value) VALUES ('todayVisits', 0) ON DUPLICATE KEY UPDATE stat_value = 0",
+    );
+    await c.execute(
+      "INSERT INTO stats (stat_key, stat_value) VALUES ('todayUsers', 0) ON DUPLICATE KEY UPDATE stat_value = 0",
+    );
+    await c.execute(
+      "INSERT INTO stats (stat_key, stat_value) VALUES ('lastDate', ?) ON DUPLICATE KEY UPDATE stat_value = ?",
+      [today, today],
+    );
+    // Clean old daily users
+    await c.execute("DELETE FROM daily_users WHERE stat_date < ?", [today]);
   }
 
-  // Update location counter (best-effort, after main commit succeeds)
+  // 2. Increment visit counters
+  await c.execute(
+    "INSERT INTO stats (stat_key, stat_value) VALUES ('totalVisits', 1) ON DUPLICATE KEY UPDATE stat_value = stat_value + 1",
+  );
+  await c.execute(
+    "INSERT INTO stats (stat_key, stat_value) VALUES ('todayVisits', 1) ON DUPLICATE KEY UPDATE stat_value = stat_value + 1",
+  );
+
+  // 3. Add user (if new, increment totalUsers)
+  const userResult = await c.execute(
+    "INSERT IGNORE INTO all_users (user_id) VALUES (?)",
+    [userId],
+  );
+  if (userResult.rowsAffected && userResult.rowsAffected > 0) {
+    await c.execute(
+      "INSERT INTO stats (stat_key, stat_value) VALUES ('totalUsers', 1) ON DUPLICATE KEY UPDATE stat_value = stat_value + 1",
+    );
+  }
+
+  // 4. Add daily user (if new, increment todayUsers)
+  const dailyResult = await c.execute(
+    "INSERT IGNORE INTO daily_users (stat_date, user_id) VALUES (?, ?)",
+    [today, userId],
+  );
+  if (dailyResult.rowsAffected && dailyResult.rowsAffected > 0) {
+    await c.execute(
+      "INSERT INTO stats (stat_key, stat_value) VALUES ('todayUsers', 1) ON DUPLICATE KEY UPDATE stat_value = stat_value + 1",
+    );
+  }
+
+  // 5. Update location counter (best-effort)
   const location = await locationPromise.catch(() => null);
   if (location) {
     try {
-      const locKey = ["locations", location.province, location.city] as const;
-      let committed = false;
-      for (let i = 0; i < 3 && !committed; i++) {
-        const locRes = await kv.get<number>(locKey);
-        const r = await kv.atomic()
-          .set(locKey, Number(locRes.value ?? 0) + 1)
-          .commit();
-        committed = r.ok;
-      }
+      await c.execute(
+        "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
+        [location.province, location.city],
+      );
     } catch (_e) {
-      // Best-effort: if location update fails, ignore
+      // Best-effort
     }
   }
 
-  return {
-    totalVisits: newTotalVisits,
-    totalUsers: newTotalUsers,
-    todayVisits: newTodayVisits,
-    todayUsers: newTodayUsers,
-  };
+  // 6. Return final stats
+  return await getStats();
 }
 
 // ---------- Read locations ----------
 async function getLocations() {
-  const kv = await getKv();
+  const c = getConnection();
+  const result = await c.execute(
+    "SELECT province, city, visit_count FROM locations ORDER BY visit_count DESC LIMIT 50",
+  );
+
   const locations: Array<{ province: string; city: string; count: number }> = [];
-  for await (const entry of kv.list({ prefix: ["locations"] })) {
-    const [, province, city] = entry.key as [string, string, string];
-    locations.push({ province, city, count: Number(entry.value) });
+  if (result.rows) {
+    for (const row of result.rows) {
+      locations.push({
+        province: row.province,
+        city: row.city,
+        count: Number(row.visit_count),
+      });
+    }
   }
-  locations.sort((a, b) => b.count - a.count);
   return locations;
 }
 
 // ---------- Reset all stats ----------
 async function resetStats() {
-  const kv = await getKv();
+  const c = getConnection();
   const today = getTodayShanghai();
 
-  // 1. Reset counters
-  await kv.atomic()
-    .set(["stats", "totalVisits"], 0)
-    .set(["stats", "totalUsers"], 0)
-    .set(["stats", "todayVisits"], 0)
-    .set(["stats", "todayUsers"], 0)
-    .set(["stats", "lastDate"], today)
-    .commit();
+  // Reset counters
+  await c.execute(
+    "INSERT INTO stats (stat_key, stat_value) VALUES ('totalVisits', 0) ON DUPLICATE KEY UPDATE stat_value = 0",
+  );
+  await c.execute(
+    "INSERT INTO stats (stat_key, stat_value) VALUES ('totalUsers', 0) ON DUPLICATE KEY UPDATE stat_value = 0",
+  );
+  await c.execute(
+    "INSERT INTO stats (stat_key, stat_value) VALUES ('todayVisits', 0) ON DUPLICATE KEY UPDATE stat_value = 0",
+  );
+  await c.execute(
+    "INSERT INTO stats (stat_key, stat_value) VALUES ('todayUsers', 0) ON DUPLICATE KEY UPDATE stat_value = 0",
+  );
+  await c.execute(
+    "INSERT INTO stats (stat_key, stat_value) VALUES ('lastDate', ?) ON DUPLICATE KEY UPDATE stat_value = ?",
+    [today, today],
+  );
 
-  // 2. Delete all user dedup records
-  for await (const entry of kv.list({ prefix: ["allUsers"] })) {
-    await kv.delete(entry.key);
-  }
-
-  // 3. Delete all daily user dedup records
-  for await (const entry of kv.list({ prefix: ["dailyUsers"] })) {
-    await kv.delete(entry.key);
-  }
-
-  // 4. Delete all location records
-  for await (const entry of kv.list({ prefix: ["locations"] })) {
-    await kv.delete(entry.key);
-  }
-
-  // NOTE: ipCache is NOT cleared — it's a cache, not stats data
+  // Clear user records
+  await c.execute("DELETE FROM all_users");
+  await c.execute("DELETE FROM daily_users");
+  await c.execute("DELETE FROM locations");
+  // NOTE: ip_cache is NOT cleared (it's a cache, not stats data)
 
   return { totalVisits: 0, totalUsers: 0, todayVisits: 0, todayUsers: 0 };
 }
@@ -247,6 +318,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({
         success: true,
         service: "id-formatter-stats",
+        database: "TiDB Cloud Serverless (MySQL)",
         endpoints: [
           "/api/health",
           "/api/stats",
@@ -261,6 +333,9 @@ Deno.serve(async (req: Request) => {
     if (path === "/api/health") {
       return jsonResponse({ success: true, message: "ok" });
     }
+
+    // Ensure tables exist before any DB operation
+    await ensureTables();
 
     if (path === "/api/stats" && req.method === "GET") {
       const data = await getStats();
