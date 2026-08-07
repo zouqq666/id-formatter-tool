@@ -330,28 +330,6 @@ textarea::placeholder {
     .quote-options { flex-direction: column; align-items: flex-start; gap: 10px; }
     .stats-bar { flex-direction: column; align-items: stretch; padding: 8px 10px; }
 }
-
-.calibrate-bar {
-    margin-top: 10px;
-    padding: 10px 14px;
-    background: #fff5e6;
-    border: 1px solid #ffd591;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-.calibrate-hint {
-    font-size: 12px;
-    color: #874d00;
-    flex: 1;
-}
-.calibrate-btn {
-    padding: 6px 14px !important;
-    font-size: 12px !important;
-}
 </style>
 </head>
 <body>
@@ -426,29 +404,21 @@ textarea::placeholder {
             <div class="stat-value today loading" id="todayUsers">--</div>
         </div>
     </div>
-
-    <div class="calibrate-bar" id="calibrateBar" style="display:none;">
-        <span class="calibrate-hint">检测到云端数据有 ±1 误差，可手动重新校准</span>
-        <button class="button button-secondary calibrate-btn" onclick="recalibrateCloud()">重新校准</button>
-    </div>
 </div>
 
 <script>
 // ============================================================
-// 跨设备统计模块 — CounterAPI + localStorage 降级
+// 跨设备统计模块 — Cloudflare Worker + KV 存储
+// API 不可用时自动降级到 localStorage
 // ============================================================
 
-var COUNTER_NS = 'zouqq666-id-formatter';
-var COUNTER_API = 'https://api.counterapi.dev/v1';
+// Worker API 地址
+var API_BASE = 'https://id-formatter-stats.zqq6260.workers.dev';
 
+// 用户唯一标识（仅存 userId，不存统计数据）
 var USER_ID_KEY = 'id_formatter_user_id';
-var LS_COUNTED_TOTAL = 'id_formatter_counted_total';
-var LS_COUNTED_DATE = 'id_formatter_counted_date';
 
-// 5 秒本地缓存，避免频繁打 counterapi.dev（免费服务有连接数限制）
-var FETCH_CACHE_TTL = 5000;
-var statsCache = { data: null, time: 0 };
-
+// localStorage 降级用的 key
 var LS_KEYS = {
     TOTAL_VISITS: 'id_formatter_total_visits',
     TOTAL_USERS: 'id_formatter_total_users',
@@ -458,7 +428,8 @@ var LS_KEYS = {
 };
 
 var statsMode = 'offline';
-var todayStr = '';
+
+// ---------- 工具函数 ----------
 
 function getTodayStr() {
     var d = new Date();
@@ -474,39 +445,17 @@ function getUserId() {
     return userId;
 }
 
-// ---------- CounterAPI 请求 ----------
-// 注意：counterapi.dev 对不存在的 key 的 GET 请求会一直挂起到超时，
-// 所以必须用 AbortController 给每个请求加超时保护。
-
-var FETCH_TIMEOUT_MS = 4000;
-
-function fetchWithTimeout(url) {
+// 带超时的 fetch（5 秒）
+function fetchWithTimeout(url, options) {
     var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     var timer = setTimeout(function() {
         if (controller) controller.abort();
-    }, FETCH_TIMEOUT_MS);
-    var opts = controller ? { signal: controller.signal } : {};
+    }, 5000);
+    var opts = options || {};
+    if (controller) opts.signal = controller.signal;
     return fetch(url, opts).finally(function() {
         clearTimeout(timer);
     });
-}
-
-function counterGet(key) {
-    return fetchWithTimeout(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/')
-        .then(function(resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return resp.json();
-        })
-        .then(function(data) { return (data && data.count !== undefined) ? data.count : 0; });
-}
-
-function counterUp(key) {
-    return fetchWithTimeout(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/up')
-        .then(function(resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return resp.json();
-        })
-        .then(function(data) { return (data && data.count !== undefined) ? data.count : 0; });
 }
 
 // ---------- 显示层 ----------
@@ -527,57 +476,9 @@ function setStatsLoading(loading) {
 function updateStatsDisplay(data) {
     if (!data) return;
     if (data.totalVisits !== undefined) document.getElementById('totalVisits').textContent = data.totalVisits;
+    if (data.totalUsers !== undefined) document.getElementById('totalUsers').textContent = data.totalUsers;
     if (data.todayVisits !== undefined) document.getElementById('todayVisits').textContent = data.todayVisits;
-    // 容差修正：累计人数必须 >= 今日人数（数学约束）
-    // counterapi.dev 是免费公共服务，偶尔有 ±1 误差
-    var totalUsers = data.totalUsers !== undefined ? data.totalUsers : 0;
-    var todayUsers = data.todayUsers !== undefined ? data.todayUsers : 0;
-    if (totalUsers < todayUsers) {
-        totalUsers = todayUsers;
-        document.getElementById('totalUsers').textContent = totalUsers;
-        document.getElementById('totalUsers').title = '已自动修正：云端数据存在 ±1 误差';
-    } else {
-        document.getElementById('totalUsers').textContent = totalUsers;
-        document.getElementById('totalUsers').title = '';
-    }
-    if (data.todayUsers !== undefined) document.getElementById('todayUsers').textContent = todayUsers;
-    // 检测数据异常：今日人数 > 累计人数时显示校准按钮
-    var calibrateBar = document.getElementById('calibrateBar');
-    if (calibrateBar) {
-        if (data.totalUsers !== undefined && data.todayUsers !== undefined &&
-            data.todayUsers > data.totalUsers) {
-            calibrateBar.style.display = 'flex';
-        }
-    }
-}
-
-// 重新校准：把 total-users 增加到等于 today-users
-function recalibrateCloud() {
-    var todayUsersEl = document.getElementById('todayUsers');
-    var totalUsersEl = document.getElementById('totalUsers');
-    var need = parseInt(todayUsersEl.textContent) - parseInt(totalUsersEl.textContent);
-    if (need <= 0) return;
-    // 连续 up 多次直到对齐
-    var done = 0;
-    function step() {
-        if (done >= need) {
-            // 清除缓存，强制重新拉取
-            statsCache = { data: null, time: 0 };
-            fetchStatsOnline();
-            var bar = document.getElementById('calibrateBar');
-            if (bar) bar.style.display = 'none';
-            return;
-        }
-        counterUp('total-users').then(function(c) {
-            totalUsersEl.textContent = c;
-            done++;
-            step();
-        }).catch(function() {
-            // 失败也继续尝试
-            setTimeout(step, 500);
-        });
-    }
-    step();
+    if (data.todayUsers !== undefined) document.getElementById('todayUsers').textContent = data.todayUsers;
 }
 
 function setMode(mode) {
@@ -593,79 +494,50 @@ function setMode(mode) {
     }
 }
 
-// ---------- 在线模式 ----------
-
-// 并行获取四个计数器，每个独立超时（4秒），全部失败才降级
-function counterGetAll(keys) {
-    return Promise.all(keys.map(function(k) {
-        return counterGet(k).catch(function() { return 0; });
-    })).then(function(arr) {
-        var out = {};
-        for (var i = 0; i < keys.length; i++) out[keys[i]] = arr[i];
-        return out;
-    });
-}
+// ---------- 在线模式（Cloudflare Worker） ----------
 
 function fetchStatsOnline() {
-    todayStr = getTodayStr();
-    // 5 秒内不重复请求云端
-    if (statsCache.data && (Date.now() - statsCache.time) < FETCH_CACHE_TTL) {
-        setMode('online');
-        updateStatsDisplay({
-            totalVisits: statsCache.data['total-visits'] || 0,
-            totalUsers: statsCache.data['total-users'] || 0,
-            todayVisits: statsCache.data['visits-' + todayStr] || 0,
-            todayUsers: statsCache.data['users-' + todayStr] || 0
-        });
-        setStatsLoading(false);
-        return;
-    }
-    var keys = ['total-visits', 'total-users', 'visits-' + todayStr, 'users-' + todayStr];
-    counterGetAll(keys)
-        .then(function(data) {
-            statsCache = { data: data, time: Date.now() };
-            setMode('online');
-            updateStatsDisplay({
-                totalVisits: data['total-visits'] || 0,
-                totalUsers: data['total-users'] || 0,
-                todayVisits: data['visits-' + todayStr] || 0,
-                todayUsers: data['users-' + todayStr] || 0
-            });
-            setStatsLoading(false);
+    fetchWithTimeout(API_BASE + '/api/stats')
+        .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        })
+        .then(function(json) {
+            if (json.success && json.data) {
+                setMode('online');
+                updateStatsDisplay(json.data);
+                setStatsLoading(false);
+            } else {
+                throw new Error(json.error || 'unknown');
+            }
         })
         .catch(function() {
+            // 降级到 localStorage
             fetchStatsLS();
         });
 }
 
 function trackVisitOnline() {
-    todayStr = getTodayStr();
-    counterUp('total-visits')
-        .then(function(count) {
-            document.getElementById('totalVisits').textContent = count;
-            setMode('online');
-
-            counterUp('visits-' + todayStr).then(function(c) {
-                document.getElementById('todayVisits').textContent = c;
-            }).catch(function() {});
-
-            var countedTotal = localStorage.getItem(LS_COUNTED_TOTAL);
-            if (!countedTotal) {
-                counterUp('total-users').then(function(c) {
-                    document.getElementById('totalUsers').textContent = c;
-                    localStorage.setItem(LS_COUNTED_TOTAL, '1');
-                }).catch(function() {});
-            }
-
-            var countedDate = localStorage.getItem(LS_COUNTED_DATE);
-            if (countedDate !== todayStr) {
-                counterUp('users-' + todayStr).then(function(c) {
-                    document.getElementById('todayUsers').textContent = c;
-                    localStorage.setItem(LS_COUNTED_DATE, todayStr);
-                }).catch(function() {});
+    var userId = getUserId();
+    fetchWithTimeout(API_BASE + '/api/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: userId })
+    })
+        .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        })
+        .then(function(json) {
+            if (json.success && json.data) {
+                setMode('online');
+                updateStatsDisplay(json.data);
+            } else {
+                throw new Error(json.error || 'unknown');
             }
         })
         .catch(function() {
+            // 降级到 localStorage
             setMode('offline');
             trackVisitLS();
         });
@@ -734,9 +606,11 @@ function fetchStats() {
 }
 
 function trackVisit(callback) {
+    // 先执行格式化功能，不阻塞用户操作
     if (callback && typeof callback === 'function') {
         callback();
     }
+    // 异步上报访问记录
     trackVisitOnline();
 }
 
