@@ -434,12 +434,12 @@ textarea::placeholder {
 
 <script>
 // ============================================================
-// 跨设备统计模块 — Cloudflare Worker + KV 存储
+// 跨设备统计模块 — Deno Deploy + Deno KV 存储
 // API 不可用时自动降级到 localStorage
 // ============================================================
 
-// Worker API 地址
-var API_BASE = 'https://id-formatter-stats.zqq6260.workers.dev';
+// Deno Deploy API 地址
+var API_BASE = 'https://id-formatter-stats.deno.dev';
 
 // 用户唯一标识（仅存 userId，不存统计数据）
 var USER_ID_KEY = 'id_formatter_user_id';
@@ -496,7 +496,7 @@ function setStatsLoading(loading) {
         var el = document.getElementById(ids[i]);
         if (loading) {
             el.classList.add('loading');
-            el.textContent = '--';
+            el.textContent = '0';
         } else {
             el.classList.remove('loading');
         }
