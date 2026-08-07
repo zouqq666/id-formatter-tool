@@ -389,19 +389,19 @@ textarea::placeholder {
     <div class="stats-bar">
         <div class="stat-item">
             <div class="stat-label">累计访问次数</div>
-            <div class="stat-value total loading" id="totalVisits">--</div>
+            <div class="stat-value total" id="totalVisits">0</div>
         </div>
         <div class="stat-item">
             <div class="stat-label">累计访问人数</div>
-            <div class="stat-value loading" id="totalUsers">--</div>
+            <div class="stat-value" id="totalUsers">0</div>
         </div>
         <div class="stat-item">
             <div class="stat-label">今日访问次数</div>
-            <div class="stat-value today loading" id="todayVisits">--</div>
+            <div class="stat-value today" id="todayVisits">0</div>
         </div>
         <div class="stat-item">
             <div class="stat-label">今日访问人数</div>
-            <div class="stat-value today loading" id="todayUsers">--</div>
+            <div class="stat-value today" id="todayUsers">0</div>
         </div>
     </div>
 </div>
@@ -768,7 +768,10 @@ document.getElementById('inputBox').addEventListener('input', function() {
 });
 
 window.addEventListener('load', function() {
-    fetchStats();
+    // 先显示缓存数据（无缓存则保持 HTML 中的 0）
+    loadCachedStats();
+    // 上报本次访问并获取最新统计
+    trackVisitOnline();
 });
 </script>
 </body>
