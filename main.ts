@@ -2,8 +2,6 @@
 // Uses Deno KV (built-in key-value store, no external database needed)
 // Accessible in China via *.deno.dev domain
 
-const kv = await Deno.openKv();
-
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -21,33 +19,50 @@ function jsonResponse(data: unknown, status = 200): Response {
 function getTodayShanghai(): string {
   const now = new Date();
   const shanghaiTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  return shanghaiTime.toISOString().slice(0, 10); // YYYY-MM-DD
+  return shanghaiTime.toISOString().slice(0, 10);
+}
+
+// Lazy KV init (deferred until first request to avoid module-load errors)
+let kvPromise: Promise<Deno.Kv> | null = null;
+function getKv(): Promise<Deno.Kv> {
+  if (!kvPromise) {
+    kvPromise = Deno.openKv();
+  }
+  return kvPromise;
 }
 
 // ---------- Read stats ----------
 async function getStats() {
-  const totalVisits = Number((await kv.get(["stats", "totalVisits"])).value ?? 0);
-  const totalUsers = Number((await kv.get(["stats", "totalUsers"])).value ?? 0);
-  const todayVisits = Number((await kv.get(["stats", "todayVisits"])).value ?? 0);
-  const todayUsers = Number((await kv.get(["stats", "todayUsers"])).value ?? 0);
-  return { totalVisits, totalUsers, todayVisits, todayUsers };
+  const kv = await getKv();
+  const [tv, tu, toV, toU] = await Promise.all([
+    kv.get(["stats", "totalVisits"]),
+    kv.get(["stats", "totalUsers"]),
+    kv.get(["stats", "todayVisits"]),
+    kv.get(["stats", "todayUsers"]),
+  ]);
+  return {
+    totalVisits: Number(tv.value ?? 0),
+    totalUsers: Number(tu.value ?? 0),
+    todayVisits: Number(toV.value ?? 0),
+    todayUsers: Number(toU.value ?? 0),
+  };
 }
 
-// ---------- Track visit (atomic increment + dedup) ----------
-async function trackVisit(userId: string): Promise<{
-  totalVisits: number;
-  totalUsers: number;
-  todayVisits: number;
-  todayUsers: number;
-}> {
+// ---------- Track visit ----------
+async function trackVisit(userId: string) {
+  const kv = await getKv();
   const today = getTodayShanghai();
 
-  // Read current state in parallel
-  const [lastDateRes, userExistsRes, todayUserExistsRes, statsRes] = await Promise.all([
+  const [lastDateRes, userExistsRes, todayUserExistsRes, totalsRes] = await Promise.all([
     kv.get<string>(["stats", "lastDate"]),
     kv.get(["allUsers", userId]),
     kv.get(["dailyUsers", today, userId]),
-    kv.get<number>(["stats", "totalVisits"]),
+    Promise.all([
+      kv.get(["stats", "totalVisits"]),
+      kv.get(["stats", "totalUsers"]),
+      kv.get(["stats", "todayVisits"]),
+      kv.get(["stats", "todayUsers"]),
+    ]),
   ]);
 
   const lastDate = lastDateRes.value;
@@ -55,19 +70,17 @@ async function trackVisit(userId: string): Promise<{
   const todayUserExists = todayUserExistsRes.value !== null;
   const isNewDay = lastDate !== today;
 
-  // Read current counters
-  const totalVisits = Number((await kv.get(["stats", "totalVisits"])).value ?? 0);
-  const totalUsers = Number((await kv.get(["stats", "totalUsers"])).value ?? 0);
-  const todayVisits = isNewDay ? 0 : Number((await kv.get(["stats", "todayVisits"])).value ?? 0);
-  const todayUsers = isNewDay ? 0 : Number((await kv.get(["stats", "todayUsers"])).value ?? 0);
+  const [tvRes, tuRes, tovRes, touRes] = totalsRes;
+  const totalVisits = Number(tvRes.value ?? 0);
+  const totalUsers = Number(tuRes.value ?? 0);
+  const todayVisits = isNewDay ? 0 : Number(tovRes.value ?? 0);
+  const todayUsers = isNewDay ? 0 : Number(touRes.value ?? 0);
 
-  // Compute new values
   const newTotalVisits = totalVisits + 1;
   const newTodayVisits = todayVisits + 1;
   const newTotalUsers = userExists ? totalUsers : totalUsers + 1;
   const newTodayUsers = todayUserExists ? todayUsers : todayUsers + 1;
 
-  // Atomic write (all or nothing)
   const atomic = kv.atomic()
     .set(["stats", "totalVisits"], newTotalVisits)
     .set(["stats", "todayVisits"], newTodayVisits)
@@ -75,17 +88,11 @@ async function trackVisit(userId: string): Promise<{
     .set(["stats", "todayUsers"], newTodayUsers)
     .set(["stats", "lastDate"], today);
 
-  if (!userExists) {
-    atomic.set(["allUsers", userId], true);
-  }
-  if (!todayUserExists) {
-    atomic.set(["dailyUsers", today, userId], true);
-  }
+  if (!userExists) atomic.set(["allUsers", userId], true);
+  if (!todayUserExists) atomic.set(["dailyUsers", today, userId], true);
 
   const result = await atomic.commit();
-
   if (!result.ok) {
-    // Retry on conflict (rare for low-traffic site)
     return trackVisit(userId);
   }
 
@@ -99,41 +106,40 @@ async function trackVisit(userId: string): Promise<{
 
 // ---------- HTTP server ----------
 Deno.serve(async (req: Request) => {
-  const url = new URL(req.url);
-  const path = url.pathname;
+  try {
+    const url = new URL(req.url);
+    const path = url.pathname;
 
-  // CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: CORS_HEADERS });
-  }
+    if (req.method === "OPTIONS") {
+      return new Response(null, { headers: CORS_HEADERS });
+    }
 
-  // Health check
-  if (path === "/api/health") {
-    return jsonResponse({ success: true, message: "ok" });
-  }
+    if (path === "/" || path === "") {
+      return jsonResponse({
+        success: true,
+        service: "id-formatter-stats",
+        endpoints: ["/api/health", "/api/stats", "/api/track (POST)"],
+      });
+    }
 
-  // Get stats
-  if (path === "/api/stats" && req.method === "GET") {
-    try {
+    if (path === "/api/health") {
+      return jsonResponse({ success: true, message: "ok" });
+    }
+
+    if (path === "/api/stats" && req.method === "GET") {
       const data = await getStats();
       return jsonResponse({ success: true, data });
-    } catch (e) {
-      return jsonResponse({ success: false, error: String(e) }, 500);
     }
-  }
 
-  // Track visit
-  if (path === "/api/track" && req.method === "POST") {
-    try {
+    if (path === "/api/track" && req.method === "POST") {
       const body = await req.json();
-      const userId = body.userId || crypto.randomUUID();
+      const userId = (body.userId as string) || crypto.randomUUID();
       const data = await trackVisit(userId);
       return jsonResponse({ success: true, data });
-    } catch (e) {
-      return jsonResponse({ success: false, error: String(e) }, 400);
     }
-  }
 
-  // 404
-  return jsonResponse({ success: false, error: "Not found" }, 404);
+    return jsonResponse({ success: false, error: "Not found" }, 404);
+  } catch (e) {
+    return jsonResponse({ success: false, error: String(e) }, 500);
+  }
 });
