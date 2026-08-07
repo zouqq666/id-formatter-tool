@@ -406,11 +406,6 @@ textarea::placeholder {
     </div>
 </div>
 
-<!-- 不蒜子统计：跨设备累计访问统计（无需后端，国内可访问） -->
-<script async src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
-<span id="busuanzi_container_site_pv" style="display:none"><span id="busuanzi_value_site_pv"></span></span>
-<span id="busuanzi_container_site_uv" style="display:none"><span id="busuanzi_value_site_uv"></span></span>
-
 <!-- 内联脚本：在主脚本之前同步填充缓存数据，彻底消除刷新闪烁 -->
 <script>
 (function() {
@@ -439,29 +434,17 @@ textarea::placeholder {
 
 <script>
 // ============================================================
-// 跨设备统计模块 — 不蒜子(busuanzi) + localStorage 混合
-// 累计统计：不蒜子（跨设备，免费，无需后端）
-// 今日统计：localStorage（本设备）
+// 跨设备统计模块 — Deno Deploy + Deno KV 存储
+// 国内可访问的 *.deno.net 域名，全 4 项指标跨设备
 // ============================================================
 
+var API_BASE = 'https://id-formatter-stats--main.zouqq666.deno.net';
 var USER_ID_KEY = 'id_formatter_user_id';
 var CACHE_KEY = 'id_formatter_cached_stats';
-var LS_KEYS = {
-    TODAY_VISITS: 'id_formatter_today_visits',
-    TODAY_USERS: 'id_formatter_today_users',
-    LAST_DATE: 'id_formatter_last_visit_date'
-};
-
 var statsMode = 'offline';
 var hasShownData = false;
-var busuanziLoaded = false;
 
 // ---------- 工具函数 ----------
-
-function getTodayStr() {
-    var d = new Date();
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-}
 
 function getUserId() {
     var userId = localStorage.getItem(USER_ID_KEY);
@@ -470,6 +453,19 @@ function getUserId() {
         localStorage.setItem(USER_ID_KEY, userId);
     }
     return userId;
+}
+
+// 带超时的 fetch（5 秒）
+function fetchWithTimeout(url, options) {
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = setTimeout(function() {
+        if (controller) controller.abort();
+    }, 5000);
+    var opts = options || {};
+    if (controller) opts.signal = controller.signal;
+    return fetch(url, opts).finally(function() {
+        clearTimeout(timer);
+    });
 }
 
 // ---------- 显示层 ----------
@@ -527,117 +523,67 @@ function saveCachedStats(data) {
     } catch (e) {}
 }
 
-// ---------- 今日统计（localStorage，本设备） ----------
+// ---------- 在线模式（Deno Deploy） ----------
 
-function checkDailyResetLS() {
-    var today = getTodayStr();
-    var lastDate = localStorage.getItem(LS_KEYS.LAST_DATE);
-    if (lastDate !== today) {
-        localStorage.setItem(LS_KEYS.LAST_DATE, today);
-        localStorage.setItem(LS_KEYS.TODAY_VISITS, '0');
-        localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify({}));
-    }
-}
-
-function getTodayStats() {
-    checkDailyResetLS();
-    var todayVisits = parseInt(localStorage.getItem(LS_KEYS.TODAY_VISITS) || '0');
-    var todayUsersRaw = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
-    var todayUserCount = Object.keys(todayUsersRaw).length;
-    return { todayVisits: todayVisits, todayUsers: todayUserCount };
-}
-
-function trackTodayVisit() {
-    checkDailyResetLS();
-    var userId = getUserId();
-
-    var todayVisits = parseInt(localStorage.getItem(LS_KEYS.TODAY_VISITS) || '0');
-    todayVisits++;
-    localStorage.setItem(LS_KEYS.TODAY_VISITS, String(todayVisits));
-
-    var todayUsersRaw = JSON.parse(localStorage.getItem(LS_KEYS.TODAY_USERS) || '{}');
-    todayUsersRaw[userId] = true;
-    localStorage.setItem(LS_KEYS.TODAY_USERS, JSON.stringify(todayUsersRaw));
-
-    return {
-        todayVisits: todayVisits,
-        todayUsers: Object.keys(todayUsersRaw).length
-    };
-}
-
-// ---------- 不蒜子统计（跨设备累计） ----------
-
-function loadBusuanziStats(retries) {
-    retries = retries || 0;
-    var pvEl = document.getElementById('busuanzi_value_site_pv');
-    var uvEl = document.getElementById('busuanzi_value_site_uv');
-
-    if (pvEl && pvEl.textContent && uvEl && uvEl.textContent) {
-        busuanziLoaded = true;
-        var totalVisits = parseInt(pvEl.textContent) || 0;
-        var totalUsers = parseInt(uvEl.textContent) || 0;
-        setMode('online');
-
-        var todayData = getTodayStats();
-        var merged = {
-            totalVisits: totalVisits,
-            totalUsers: totalUsers,
-            todayVisits: todayData.todayVisits,
-            todayUsers: todayData.todayUsers
-        };
-        updateStatsDisplay(merged);
-        saveCachedStats(merged);
-        hasShownData = true;
-        return;
-    }
-
-    if (retries < 30) {
-        setTimeout(function() { loadBusuanziStats(retries + 1); }, 300);
-    } else {
-        if (!busuanziLoaded) {
-            setMode('offline');
-            var td = getTodayStats();
-            if (!hasShownData) {
-                updateStatsDisplay({
-                    totalVisits: 0,
-                    totalUsers: 0,
-                    todayVisits: td.todayVisits,
-                    todayUsers: td.todayUsers
-                });
+function fetchStatsOnline() {
+    fetchWithTimeout(API_BASE + '/api/stats')
+        .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        })
+        .then(function(json) {
+            if (json.success && json.data) {
+                setMode('online');
+                updateStatsDisplay(json.data);
+                saveCachedStats(json.data);
+                hasShownData = true;
+            } else {
+                throw new Error(json.error || 'unknown');
             }
-        }
-    }
+        })
+        .catch(function() {
+            setMode('offline');
+        });
+}
+
+function trackVisitOnline() {
+    var userId = getUserId();
+    fetchWithTimeout(API_BASE + '/api/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: userId })
+    })
+        .then(function(resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        })
+        .then(function(json) {
+            if (json.success && json.data) {
+                setMode('online');
+                updateStatsDisplay(json.data);
+                saveCachedStats(json.data);
+                hasShownData = true;
+            } else {
+                throw new Error(json.error || 'unknown');
+            }
+        })
+        .catch(function() {
+            setMode('offline');
+        });
 }
 
 // ---------- 统一入口 ----------
 
 function fetchStats() {
     loadCachedStats();
-    loadBusuanziStats();
+    fetchStatsOnline();
 }
 
 function trackVisit(callback) {
     if (callback && typeof callback === 'function') {
         callback();
     }
-    var todayData = trackTodayVisit();
-    if (busuanziLoaded) {
-        var pvEl = document.getElementById('busuanzi_value_site_pv');
-        var uvEl = document.getElementById('busuanzi_value_site_uv');
-        var merged = {
-            totalVisits: parseInt(pvEl && pvEl.textContent) || 0,
-            totalUsers: parseInt(uvEl && uvEl.textContent) || 0,
-            todayVisits: todayData.todayVisits,
-            todayUsers: todayData.todayUsers
-        };
-        updateStatsDisplay(merged);
-        saveCachedStats(merged);
-    } else {
-        updateStatsDisplay({
-            todayVisits: todayData.todayVisits,
-            todayUsers: todayData.todayUsers
-        });
-    }
+    trackVisitOnline();
 }
 
 // ============================================================
@@ -729,10 +675,8 @@ document.getElementById('inputBox').addEventListener('input', function() {
 window.addEventListener('load', function() {
     // 先显示缓存数据（无缓存则保持 HTML 中的 0）
     loadCachedStats();
-    // 记录今日访问（localStorage）
-    trackTodayVisit();
-    // 异步加载不蒜子累计数据
-    loadBusuanziStats();
+    // 上报本次访问并获取最新统计（跨设备）
+    trackVisitOnline();
 });
 </script>
 </body>
