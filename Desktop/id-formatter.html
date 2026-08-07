@@ -444,9 +444,24 @@ function getUserId() {
 }
 
 // ---------- CounterAPI 请求 ----------
+// 注意：counterapi.dev 对不存在的 key 的 GET 请求会一直挂起到超时，
+// 所以必须用 AbortController 给每个请求加超时保护。
+
+var FETCH_TIMEOUT_MS = 4000;
+
+function fetchWithTimeout(url) {
+    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = setTimeout(function() {
+        if (controller) controller.abort();
+    }, FETCH_TIMEOUT_MS);
+    var opts = controller ? { signal: controller.signal } : {};
+    return fetch(url, opts).finally(function() {
+        clearTimeout(timer);
+    });
+}
 
 function counterGet(key) {
-    return fetch(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/')
+    return fetchWithTimeout(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/')
         .then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             return resp.json();
@@ -455,7 +470,7 @@ function counterGet(key) {
 }
 
 function counterUp(key) {
-    return fetch(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/up')
+    return fetchWithTimeout(COUNTER_API + '/' + COUNTER_NS + '/' + key + '/up')
         .then(function(resp) {
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             return resp.json();
@@ -501,24 +516,30 @@ function setMode(mode) {
 
 // ---------- 在线模式 ----------
 
+// 并行获取四个计数器，每个独立超时（4秒），全部失败才降级
+function counterGetAll(keys) {
+    return Promise.all(keys.map(function(k) {
+        return counterGet(k).catch(function() { return 0; });
+    })).then(function(arr) {
+        var out = {};
+        for (var i = 0; i < keys.length; i++) out[keys[i]] = arr[i];
+        return out;
+    });
+}
+
 function fetchStatsOnline() {
     todayStr = getTodayStr();
-    counterGet('total-visits')
-        .then(function(totalVisits) {
+    var keys = ['total-visits', 'total-users', 'visits-' + todayStr, 'users-' + todayStr];
+    counterGetAll(keys)
+        .then(function(data) {
             setMode('online');
-            Promise.all([
-                counterGet('total-users').catch(function() { return 0; }),
-                counterGet('visits-' + todayStr).catch(function() { return 0; }),
-                counterGet('users-' + todayStr).catch(function() { return 0; })
-            ]).then(function(results) {
-                updateStatsDisplay({
-                    totalVisits: totalVisits,
-                    totalUsers: results[0],
-                    todayVisits: results[1],
-                    todayUsers: results[2]
-                });
-                setStatsLoading(false);
+            updateStatsDisplay({
+                totalVisits: data['total-visits'] || 0,
+                totalUsers: data['total-users'] || 0,
+                todayVisits: data['visits-' + todayStr] || 0,
+                todayUsers: data['users-' + todayStr] || 0
             });
+            setStatsLoading(false);
         })
         .catch(function() {
             fetchStatsLS();
