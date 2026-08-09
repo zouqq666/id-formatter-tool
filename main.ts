@@ -183,9 +183,8 @@ async function trackVisit(userId: string, req: Request) {
   const today = getTodayShanghai();
   const todayNum = getTodayShanghaiNum();
 
-  // Start IP location lookup in parallel (best-effort)
+  // IP extracted here for fire-and-forget location lookup below
   const ip = getClientIp(req);
-  const locationPromise = ip ? lookupIpLocation(ip) : Promise.resolve(null);
 
   // 1. Check and handle day reset (lastDate stored as number, e.g. 20260809)
   const dateResult = await c.execute(
@@ -241,17 +240,17 @@ async function trackVisit(userId: string, req: Request) {
     );
   }
 
-  // 5. Update location counter (best-effort)
-  const location = await locationPromise.catch(() => null);
-  if (location) {
-    try {
-      await c.execute(
-        "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
-        [location.province, location.city],
-      );
-    } catch (_e) {
-      // Best-effort
-    }
+  // 5. Update location counter (fire-and-forget, non-blocking)
+  // IP geolocation is best-effort — never block the track response
+  if (ip) {
+    lookupIpLocation(ip).then((location) => {
+      if (location) {
+        c.execute(
+          "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
+          [location.province, location.city],
+        ).catch(() => {});
+      }
+    }).catch(() => {});
   }
 
   // 6. Return final stats
