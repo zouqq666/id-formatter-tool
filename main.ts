@@ -91,10 +91,17 @@ async function ensureTables() {
 // ---------- IP geolocation helpers ----------
 
 function getClientIp(req: Request): string | null {
+  // Deno Deploy sets x-forwarded-for; also check common alternatives
   const xff = req.headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0].trim();
   const cf = req.headers.get("cf-connecting-ip");
   if (cf) return cf.trim();
+  const xRealIp = req.headers.get("x-real-ip");
+  if (xRealIp) return xRealIp.trim();
+  const xClientIp = req.headers.get("x-client-ip");
+  if (xClientIp) return xClientIp.trim();
+  const flyClient = req.headers.get("fly-client-ip");
+  if (flyClient) return flyClient.trim();
   return null;
 }
 
@@ -240,17 +247,22 @@ async function trackVisit(userId: string, req: Request) {
     );
   }
 
-  // 5. Update location counter (fire-and-forget, non-blocking)
-  // IP geolocation is best-effort — never block the track response
+  // 5. Update location counter (await with 2s timeout — fire-and-forget gets killed by serverless)
   if (ip) {
-    lookupIpLocation(ip).then((location) => {
+    try {
+      const location = await Promise.race([
+        lookupIpLocation(ip),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+      ]);
       if (location) {
-        c.execute(
+        await c.execute(
           "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
           [location.province, location.city],
-        ).catch(() => {});
+        );
       }
-    }).catch(() => {});
+    } catch (_e) {
+      // Best-effort: location lookup failed, continue
+    }
   }
 
   // 6. Return final stats
@@ -362,6 +374,11 @@ Deno.serve(async (req: Request) => {
 
     if (path === "/api/debug-ip" && req.method === "GET") {
       const ip = getClientIp(req);
+      // Dump all headers for debugging
+      const allHeaders: Record<string, string> = {};
+      req.headers.forEach((value, key) => {
+        allHeaders[key] = value;
+      });
       const location = ip ? await lookupIpLocation(ip) : null;
       return jsonResponse({
         success: true,
@@ -369,6 +386,7 @@ Deno.serve(async (req: Request) => {
           detectedIp: ip,
           isPrivate: ip ? isPrivateIp(ip) : null,
           location: location,
+          allHeaders: allHeaders,
         },
       });
     }
