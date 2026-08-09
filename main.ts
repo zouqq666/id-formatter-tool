@@ -25,6 +25,11 @@ function getTodayShanghai(): string {
   return shanghaiTime.toISOString().slice(0, 10);
 }
 
+// Get today's date as a number (e.g., 20260809) — for storing in BIGINT column
+function getTodayShanghaiNum(): number {
+  return parseInt(getTodayShanghai().replace(/-/g, ""), 10);
+}
+
 // ---------- Database connection (lazy init) ----------
 
 let conn: ReturnType<typeof connect> | null = null;
@@ -176,20 +181,21 @@ async function getStats() {
 async function trackVisit(userId: string, req: Request) {
   const c = getConnection();
   const today = getTodayShanghai();
+  const todayNum = getTodayShanghaiNum();
 
   // Start IP location lookup in parallel (best-effort)
   const ip = getClientIp(req);
   const locationPromise = ip ? lookupIpLocation(ip) : Promise.resolve(null);
 
-  // 1. Check and handle day reset
+  // 1. Check and handle day reset (lastDate stored as number, e.g. 20260809)
   const dateResult = await c.execute(
     "SELECT stat_value FROM stats WHERE stat_key = 'lastDate'",
   );
   const lastDate = dateResult.rows && dateResult.rows.length > 0
-    ? dateResult.rows[0].stat_value
+    ? Number(dateResult.rows[0].stat_value)
     : null;
 
-  if (lastDate !== today) {
+  if (lastDate !== todayNum) {
     // New day: reset today's counters
     await c.execute(
       "INSERT INTO stats (stat_key, stat_value) VALUES ('todayVisits', 0) ON DUPLICATE KEY UPDATE stat_value = 0",
@@ -199,7 +205,7 @@ async function trackVisit(userId: string, req: Request) {
     );
     await c.execute(
       "INSERT INTO stats (stat_key, stat_value) VALUES ('lastDate', ?) ON DUPLICATE KEY UPDATE stat_value = ?",
-      [today, today],
+      [todayNum, todayNum],
     );
     // Clean old daily users
     await c.execute("DELETE FROM daily_users WHERE stat_date < ?", [today]);
@@ -276,6 +282,7 @@ async function getLocations() {
 async function resetStats() {
   const c = getConnection();
   const today = getTodayShanghai();
+  const todayNum = getTodayShanghaiNum();
 
   // Reset counters
   await c.execute(
@@ -292,7 +299,7 @@ async function resetStats() {
   );
   await c.execute(
     "INSERT INTO stats (stat_key, stat_value) VALUES ('lastDate', ?) ON DUPLICATE KEY UPDATE stat_value = ?",
-    [today, today],
+    [todayNum, todayNum],
   );
 
   // Clear user records
