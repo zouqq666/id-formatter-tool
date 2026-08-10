@@ -90,8 +90,8 @@ async function ensureTables() {
 
 // ---------- IP geolocation helpers ----------
 
-function getClientIp(req: Request): string | null {
-  // Deno Deploy sets x-forwarded-for; also check common alternatives
+function getClientIp(req: Request, info?: { remoteAddr?: { hostname?: string } }): string | null {
+  // Try standard headers first
   const xff = req.headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0].trim();
   const cf = req.headers.get("cf-connecting-ip");
@@ -102,6 +102,11 @@ function getClientIp(req: Request): string | null {
   if (xClientIp) return xClientIp.trim();
   const flyClient = req.headers.get("fly-client-ip");
   if (flyClient) return flyClient.trim();
+  // Fallback: Deno.serve info.remoteAddr (may be edge node IP on Deno Deploy)
+  if (info?.remoteAddr?.hostname) {
+    const host = info.remoteAddr.hostname;
+    if (!isPrivateIp(host)) return host;
+  }
   return null;
 }
 
@@ -185,13 +190,13 @@ async function getStats() {
 }
 
 // ---------- Track visit ----------
-async function trackVisit(userId: string, req: Request) {
+async function trackVisit(userId: string, req: Request, info?: { remoteAddr?: { hostname?: string } }) {
   const c = getConnection();
   const today = getTodayShanghai();
   const todayNum = getTodayShanghaiNum();
 
-  // IP extracted here for fire-and-forget location lookup below
-  const ip = getClientIp(req);
+  // IP extracted here for location lookup below
+  const ip = getClientIp(req, info);
 
   // 1. Check and handle day reset (lastDate stored as number, e.g. 20260809)
   const dateResult = await c.execute(
@@ -247,12 +252,12 @@ async function trackVisit(userId: string, req: Request) {
     );
   }
 
-  // 5. Update location counter (await with 2s timeout — fire-and-forget gets killed by serverless)
+  // 5. Update location counter (await with 1.5s timeout — keeps total response under frontend 5s limit)
   if (ip) {
     try {
       const location = await Promise.race([
         lookupIpLocation(ip),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
       ]);
       if (location) {
         await c.execute(
@@ -323,7 +328,7 @@ async function resetStats() {
 }
 
 // ---------- HTTP server ----------
-Deno.serve(async (req: Request) => {
+Deno.serve(async (req: Request, info) => {
   try {
     const url = new URL(req.url);
     const path = url.pathname;
@@ -363,7 +368,7 @@ Deno.serve(async (req: Request) => {
     if (path === "/api/track" && req.method === "POST") {
       const body = await req.json();
       const userId = (body.userId as string) || crypto.randomUUID();
-      const data = await trackVisit(userId, req);
+      const data = await trackVisit(userId, req, info);
       return jsonResponse({ success: true, data });
     }
 
@@ -373,7 +378,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (path === "/api/debug-ip" && req.method === "GET") {
-      const ip = getClientIp(req);
+      const ip = getClientIp(req, info);
       // Dump all headers for debugging
       const allHeaders: Record<string, string> = {};
       req.headers.forEach((value, key) => {
@@ -386,6 +391,7 @@ Deno.serve(async (req: Request) => {
           detectedIp: ip,
           isPrivate: ip ? isPrivateIp(ip) : null,
           location: location,
+          remoteAddr: info?.remoteAddr?.hostname || null,
           allHeaders: allHeaders,
         },
       });
