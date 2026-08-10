@@ -126,7 +126,7 @@ function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-// Lookup IP location: try ip-api.com (Chinese) first, fall back to ipapi.co (English)
+// Lookup IP location: pconline (primary, accurate for Chinese IPs, GBK) → ip-api.com (fallback)
 // Results cached in ip_cache table to avoid repeated API calls
 async function lookupIpLocation(
   ip: string,
@@ -141,25 +141,28 @@ async function lookupIpLocation(
   );
   if (cached.rows && cached.rows.length > 0) {
     return {
-      province: cached.rows[0].province,
-      city: cached.rows[0].city,
+      province: cached.rows[0].province as string,
+      city: cached.rows[0].city as string,
     };
   }
 
-  // Try ip-api.com (free, Chinese language, HTTP)
+  // Primary: pconline (太平洋电脑网, accurate for Chinese IPs, returns GBK encoding)
   try {
     const controller1 = new AbortController();
     const timer1 = setTimeout(() => controller1.abort(), 3000);
     const resp1 = await fetch(
-      `http://ip-api.com/json/${ip}?lang=zh-CN&fields=status,regionName,city`,
+      `https://whois.pconline.com.cn/ipJson.jsp?ip=${ip}&json=true`,
       { signal: controller1.signal },
     );
     clearTimeout(timer1);
-    const data1 = await resp1.json();
-    if (data1.status === "success" && data1.regionName) {
+    // pconline returns GBK — decode ArrayBuffer with TextDecoder('gbk')
+    const buffer1 = await resp1.arrayBuffer();
+    const text1 = new TextDecoder("gbk").decode(buffer1);
+    const data1 = JSON.parse(text1);
+    if (data1 && data1.pro && data1.city && data1.err === "") {
       const location = {
-        province: data1.regionName,
-        city: data1.city || data1.regionName,
+        province: data1.pro as string,
+        city: data1.city as string,
       };
       await c.execute(
         "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, ?, ?)",
@@ -168,22 +171,23 @@ async function lookupIpLocation(
       return location;
     }
   } catch (_e) {
-    // Fall through to ipapi.co
+    // Fall through to fallback
   }
 
-  // Fall back to ipapi.co (HTTPS, English, ~1000 req/day)
+  // Fallback: ip-api.com (free, Chinese language, HTTP)
   try {
     const controller2 = new AbortController();
     const timer2 = setTimeout(() => controller2.abort(), 3000);
-    const resp2 = await fetch(`https://ipapi.co/${ip}/json/`, {
-      signal: controller2.signal,
-    });
+    const resp2 = await fetch(
+      `http://ip-api.com/json/${ip}?lang=zh-CN&fields=status,regionName,city`,
+      { signal: controller2.signal },
+    );
     clearTimeout(timer2);
     const data2 = await resp2.json();
-    if (data2 && !data2.error && data2.region) {
+    if (data2.status === "success" && data2.regionName) {
       const location = {
-        province: data2.region || "Unknown",
-        city: data2.city || data2.region || "Unknown",
+        province: data2.regionName as string,
+        city: (data2.city || data2.regionName) as string,
       };
       await c.execute(
         "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, ?, ?)",
@@ -352,7 +356,7 @@ async function resetStats() {
   await c.execute("DELETE FROM all_users");
   await c.execute("DELETE FROM daily_users");
   await c.execute("DELETE FROM locations");
-  // NOTE: ip_cache is NOT cleared (it's a cache, not stats data)
+  await c.execute("DELETE FROM ip_cache");
 
   return { totalVisits: 0, totalUsers: 0, todayVisits: 0, todayUsers: 0 };
 }
