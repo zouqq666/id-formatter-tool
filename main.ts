@@ -134,9 +134,9 @@ async function lookupIpLocation(
   if (isPrivateIp(ip)) return null;
   const c = getConnection();
 
-  // Check DB cache first
+  // Check DB cache first (only return if province is filled — NULL means pending lookup)
   const cached = await c.execute(
-    "SELECT province, city FROM ip_cache WHERE ip = ?",
+    "SELECT province, city FROM ip_cache WHERE ip = ? AND province IS NOT NULL AND province != ''",
     [ip],
   );
   if (cached.rows && cached.rows.length > 0) {
@@ -165,7 +165,7 @@ async function lookupIpLocation(
         city: data1.city as string,
       };
       await c.execute(
-        "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, ?, ?)",
+        "INSERT INTO ip_cache (ip, province, city) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE province = VALUES(province), city = VALUES(city)",
         [ip, location.province, location.city],
       );
       return location;
@@ -190,7 +190,7 @@ async function lookupIpLocation(
         city: (data2.city || data2.regionName) as string,
       };
       await c.execute(
-        "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, ?, ?)",
+        "INSERT INTO ip_cache (ip, province, city) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE province = VALUES(province), city = VALUES(city)",
         [ip, location.province, location.city],
       );
       return location;
@@ -286,21 +286,29 @@ async function trackVisit(userId: string, req: Request, info?: { remoteAddr?: { 
     );
   }
 
-  // 5. Update location counter (await with 2.5s timeout — pconline GBK decode takes longer)
+  // 5. Record IP for lazy location lookup (fast — no external API call)
+  //    If IP already has cached location, increment locations counter immediately.
+  //    If not, IP is stored as "pending" — getLocations() will look it up via pconline.
   if (ip) {
     try {
-      const location = await Promise.race([
-        lookupIpLocation(ip),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
-      ]);
-      if (location) {
+      // Insert IP as pending if not exists (won't overwrite existing cached location)
+      await c.execute(
+        "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, NULL, NULL)",
+        [ip],
+      );
+      // If location already cached, increment locations counter
+      const locRow = await c.execute(
+        "SELECT province, city FROM ip_cache WHERE ip = ? AND province IS NOT NULL AND province != ''",
+        [ip],
+      );
+      if (locRow.rows && locRow.rows.length > 0) {
         await c.execute(
           "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
-          [location.province, location.city],
+          [locRow.rows[0].province, locRow.rows[0].city],
         );
       }
     } catch (_e) {
-      // Best-effort: location lookup failed, continue
+      // Best-effort: IP recording failed, continue
     }
   }
 
@@ -311,6 +319,41 @@ async function trackVisit(userId: string, req: Request, info?: { remoteAddr?: { 
 // ---------- Read locations ----------
 async function getLocations() {
   const c = getConnection();
+
+  // Lazy lookup: find IPs without location data and look them up via pconline
+  try {
+    const pending = await c.execute(
+      "SELECT ip FROM ip_cache WHERE province IS NULL LIMIT 10",
+    );
+    if (pending.rows && pending.rows.length > 0) {
+      for (const row of pending.rows) {
+        const ip = row.ip as string;
+        try {
+          const location = await lookupIpLocation(ip);
+          if (location) {
+            // lookupIpLocation already updated ip_cache via ON DUPLICATE KEY UPDATE
+            // Now increment locations counter for this newly located IP
+            await c.execute(
+              "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
+              [location.province, location.city],
+            );
+          } else {
+            // Lookup failed — mark as empty string to avoid retrying every time
+            await c.execute(
+              "UPDATE ip_cache SET province = '', city = '' WHERE ip = ?",
+              [ip],
+            );
+          }
+        } catch (_e) {
+          // Skip this IP, continue with next
+        }
+      }
+    }
+  } catch (_e) {
+    // Best-effort: lazy lookup failed, continue with existing data
+  }
+
+  // Return aggregated locations
   const result = await c.execute(
     "SELECT province, city, visit_count FROM locations ORDER BY visit_count DESC LIMIT 50",
   );
