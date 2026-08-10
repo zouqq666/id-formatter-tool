@@ -93,21 +93,27 @@ async function ensureTables() {
 function getClientIp(req: Request, info?: { remoteAddr?: { hostname?: string } }): string | null {
   // Try standard headers first
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
+  if (xff) return cleanIp(xff.split(",")[0].trim());
   const cf = req.headers.get("cf-connecting-ip");
-  if (cf) return cf.trim();
+  if (cf) return cleanIp(cf.trim());
   const xRealIp = req.headers.get("x-real-ip");
-  if (xRealIp) return xRealIp.trim();
+  if (xRealIp) return cleanIp(xRealIp.trim());
   const xClientIp = req.headers.get("x-client-ip");
-  if (xClientIp) return xClientIp.trim();
+  if (xClientIp) return cleanIp(xClientIp.trim());
   const flyClient = req.headers.get("fly-client-ip");
-  if (flyClient) return flyClient.trim();
-  // Fallback: Deno.serve info.remoteAddr (may be edge node IP on Deno Deploy)
+  if (flyClient) return cleanIp(flyClient.trim());
+  // Fallback: Deno.serve info.remoteAddr
   if (info?.remoteAddr?.hostname) {
-    const host = info.remoteAddr.hostname;
+    const host = cleanIp(info.remoteAddr.hostname);
     if (!isPrivateIp(host)) return host;
   }
   return null;
+}
+
+// Strip IPv4-mapped IPv6 prefix (::ffff:) so IP geolocation services work
+function cleanIp(ip: string): string {
+  if (ip.startsWith("::ffff:")) return ip.slice(7);
+  return ip;
 }
 
 function isPrivateIp(ip: string): boolean {
@@ -120,9 +126,8 @@ function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-// Lookup IP location using ipapi.co (HTTPS, free ~1000 req/day)
+// Lookup IP location: try ip-api.com (Chinese) first, fall back to ipapi.co (English)
 // Results cached in ip_cache table to avoid repeated API calls
-// 3-second timeout prevents the track request from hanging
 async function lookupIpLocation(
   ip: string,
 ): Promise<{ province: string; city: string } | null> {
@@ -141,20 +146,21 @@ async function lookupIpLocation(
     };
   }
 
+  // Try ip-api.com (free, Chinese language, HTTP)
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    const resp = await fetch(`https://ipapi.co/${ip}/json/`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    const data = await resp.json();
-    if (data && !data.error && data.region) {
+    const controller1 = new AbortController();
+    const timer1 = setTimeout(() => controller1.abort(), 3000);
+    const resp1 = await fetch(
+      `http://ip-api.com/json/${ip}?lang=zh-CN&fields=status,regionName,city`,
+      { signal: controller1.signal },
+    );
+    clearTimeout(timer1);
+    const data1 = await resp1.json();
+    if (data1.status === "success" && data1.regionName) {
       const location = {
-        province: data.region || "Unknown",
-        city: data.city || data.region || "Unknown",
+        province: data1.regionName,
+        city: data1.city || data1.regionName,
       };
-      // Cache in DB
       await c.execute(
         "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, ?, ?)",
         [ip, location.province, location.city],
@@ -162,7 +168,31 @@ async function lookupIpLocation(
       return location;
     }
   } catch (_e) {
-    // Best-effort: timeout or fetch error
+    // Fall through to ipapi.co
+  }
+
+  // Fall back to ipapi.co (HTTPS, English, ~1000 req/day)
+  try {
+    const controller2 = new AbortController();
+    const timer2 = setTimeout(() => controller2.abort(), 3000);
+    const resp2 = await fetch(`https://ipapi.co/${ip}/json/`, {
+      signal: controller2.signal,
+    });
+    clearTimeout(timer2);
+    const data2 = await resp2.json();
+    if (data2 && !data2.error && data2.region) {
+      const location = {
+        province: data2.region || "Unknown",
+        city: data2.city || data2.region || "Unknown",
+      };
+      await c.execute(
+        "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, ?, ?)",
+        [ip, location.province, location.city],
+      );
+      return location;
+    }
+  } catch (_e) {
+    // Best-effort: both lookups failed
   }
   return null;
 }
