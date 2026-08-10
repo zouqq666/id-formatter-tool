@@ -286,12 +286,12 @@ async function trackVisit(userId: string, req: Request, info?: { remoteAddr?: { 
     );
   }
 
-  // 5. Update location counter (await with 1.5s timeout — keeps total response under frontend 5s limit)
+  // 5. Update location counter (await with 2.5s timeout — pconline GBK decode takes longer)
   if (ip) {
     try {
       const location = await Promise.race([
         lookupIpLocation(ip),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
       ]);
       if (location) {
         await c.execute(
