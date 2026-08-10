@@ -81,9 +81,16 @@ async function ensureTables() {
     CREATE TABLE IF NOT EXISTS ip_cache (
       ip VARCHAR(50) PRIMARY KEY,
       province VARCHAR(100),
-      city VARCHAR(100)
+      city VARCHAR(100),
+      visit_count INT NOT NULL DEFAULT 1
     )
   `);
+  // Add visit_count column to existing ip_cache table (migration for old schema)
+  try {
+    await c.execute("ALTER TABLE ip_cache ADD COLUMN visit_count INT NOT NULL DEFAULT 1");
+  } catch (_e) {
+    // Column already exists — ignore
+  }
 
   tablesReady = true;
 }
@@ -286,27 +293,14 @@ async function trackVisit(userId: string, req: Request, info?: { remoteAddr?: { 
     );
   }
 
-  // 5. Record IP for lazy location lookup (fast — no external API call)
-  //    If IP already has cached location, increment locations counter immediately.
-  //    If not, IP is stored as "pending" — getLocations() will look it up via pconline.
+  // 5. Record IP + visit count (fast — no external API call)
+  //    visit_count is incremented on every visit; province/city filled lazily by getLocations
   if (ip) {
     try {
-      // Insert IP as pending if not exists (won't overwrite existing cached location)
       await c.execute(
-        "INSERT IGNORE INTO ip_cache (ip, province, city) VALUES (?, NULL, NULL)",
+        "INSERT INTO ip_cache (ip, province, city, visit_count) VALUES (?, NULL, NULL, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
         [ip],
       );
-      // If location already cached, increment locations counter
-      const locRow = await c.execute(
-        "SELECT province, city FROM ip_cache WHERE ip = ? AND province IS NOT NULL AND province != ''",
-        [ip],
-      );
-      if (locRow.rows && locRow.rows.length > 0) {
-        await c.execute(
-          "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
-          [locRow.rows[0].province, locRow.rows[0].city],
-        );
-      }
     } catch (_e) {
       // Best-effort: IP recording failed, continue
     }
@@ -320,7 +314,7 @@ async function trackVisit(userId: string, req: Request, info?: { remoteAddr?: { 
 async function getLocations() {
   const c = getConnection();
 
-  // Lazy lookup: find IPs without location data and look them up via pconline
+  // Lazy lookup: find IPs without location data and cache them via pconline
   try {
     const pending = await c.execute(
       "SELECT ip FROM ip_cache WHERE province IS NULL LIMIT 10",
@@ -330,20 +324,14 @@ async function getLocations() {
         const ip = row.ip as string;
         try {
           const location = await lookupIpLocation(ip);
-          if (location) {
-            // lookupIpLocation already updated ip_cache via ON DUPLICATE KEY UPDATE
-            // Now increment locations counter for this newly located IP
-            await c.execute(
-              "INSERT INTO locations (province, city, visit_count) VALUES (?, ?, 1) ON DUPLICATE KEY UPDATE visit_count = visit_count + 1",
-              [location.province, location.city],
-            );
-          } else {
+          if (!location) {
             // Lookup failed — mark as empty string to avoid retrying every time
             await c.execute(
               "UPDATE ip_cache SET province = '', city = '' WHERE ip = ?",
               [ip],
             );
           }
+          // lookupIpLocation already updated ip_cache province/city via ON DUPLICATE KEY UPDATE
         } catch (_e) {
           // Skip this IP, continue with next
         }
@@ -353,9 +341,9 @@ async function getLocations() {
     // Best-effort: lazy lookup failed, continue with existing data
   }
 
-  // Return aggregated locations
+  // Aggregate locations directly from ip_cache (visit_count tracks all visits per IP)
   const result = await c.execute(
-    "SELECT province, city, visit_count FROM locations ORDER BY visit_count DESC LIMIT 50",
+    "SELECT province, city, SUM(visit_count) as total FROM ip_cache WHERE province IS NOT NULL AND province != '' GROUP BY province, city ORDER BY total DESC LIMIT 50",
   );
 
   const locations: Array<{ province: string; city: string; count: number }> = [];
@@ -364,7 +352,7 @@ async function getLocations() {
       locations.push({
         province: row.province,
         city: row.city,
-        count: Number(row.visit_count),
+        count: Number(row.total),
       });
     }
   }
