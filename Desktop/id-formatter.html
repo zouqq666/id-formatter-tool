@@ -405,7 +405,7 @@ textarea::placeholder {
     color: #667eea;
 }
 
-/* ---------- JSON 面板：左右分栏 + 折叠树 ---------- */
+/* ---------- JSON 面板：左右分栏 + json.cn 风格键值对折叠树 ---------- */
 .container { transition: max-width 0.25s ease; }
 body.json-mode .container { max-width: 1240px; }
 
@@ -431,13 +431,13 @@ body.json-mode .container { max-width: 1240px; }
     height: 460px;
     min-height: 460px;
     overflow: auto;
-    padding: 14px 16px;
+    padding: 12px 14px;
     border: 2px solid #667eea;
     border-radius: 12px;
-    background: #f7f9ff;
+    background: #ffffff;
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     font-size: 13px;
-    line-height: 1.75;
+    line-height: 1.6;
     color: #333;
 }
 
@@ -450,39 +450,55 @@ body.json-mode .container { max-width: 1240px; }
     justify-content: center;
 }
 
-.j-line { white-space: pre-wrap; word-break: break-all; }
-.j-head { cursor: pointer; border-radius: 4px; padding: 0 2px; }
-.j-head:hover { background: #e6ecff; }
+/* 每一行都是块级，hover 高亮整行 */
+.j-line {
+    display: block;
+    white-space: pre;
+    word-break: break-all;
+    border-radius: 4px;
+    padding: 1px 4px;
+    min-height: 1.6em;
+}
+.j-head { cursor: pointer; }
+.j-head:hover { background: #f0f4ff; }
 
+/* 折叠箭头：展开 ▾ / 折叠 ▸，仅容器节点可见 */
 .j-caret {
     display: inline-block;
     width: 14px;
-    color: #667eea;
-    transition: transform 0.15s ease;
+    text-align: center;
+    color: #666;
     -webkit-user-select: none;
     user-select: none;
+    font-size: 11px;
 }
-.j-caret.leaf { visibility: hidden; }
-.j-block.collapsed > .j-head > .j-caret { transform: rotate(-90deg); }
-.j-block.collapsed > .j-children,
-.j-block.collapsed > .j-tail { display: none; }
+.j-caret-expanded  { display: inline; }
+.j-caret-collapsed { display: none; }
+.j-caret-placeholder { display: inline-block; width: 14px; }
 
-.j-ellipsis { display: none; color: #8a93b2; }
-.j-block.collapsed > .j-head > .j-ellipsis { display: inline; }
+.j-block.collapsed .j-caret-expanded  { display: none; }
+.j-block.collapsed .j-caret-collapsed { display: inline; }
 
+/* 容器展开/折叠时的值切换 */
+.j-open   { display: inline; }
+.j-folded { display: none; color: #999; }
+.j-block.collapsed .j-open   { display: none; }
+.j-block.collapsed .j-folded { display: inline; }
+
+/* 子节点缩进，去掉虚线，纯缩进更贴近 json.cn */
 .j-children {
-    margin-left: 7px;
-    padding-left: 12px;
-    border-left: 1px dashed #d3dbf7;
+    margin-left: 0;
+    padding-left: 20px;
 }
 
-.j-key  { color: #7048e8; font-weight: 600; }
-.j-str  { color: #0b7285; }
-.j-num  { color: #d9480f; }
-.j-bool { color: #2b8a3e; font-weight: 600; }
-.j-null { color: #868e96; font-style: italic; }
-.j-punc { color: #5c5f77; }
-.j-count { color: #8a93b2; font-size: 11px; margin-left: 6px; }
+/* 颜色方案 */
+.j-key  { color: #333; }
+.j-str  { color: #0d8a00; }
+.j-num  { color: #0969da; }
+.j-bool { color: #8250df; font-weight: 500; }
+.j-null { color: #9e9e9e; font-style: italic; }
+.j-punc { color: #6e7781; }
+.j-count { color: #999; font-size: 11px; margin-left: 4px; }
 
 @media (max-width: 900px) {
     .json-panes { grid-template-columns: 1fr; }
@@ -570,7 +586,7 @@ body.json-mode .container { max-width: 1240px; }
             </div>
 
             <div class="json-pane">
-                <div class="section-title">美化结果（点击 ▾ 折叠 / 展开）</div>
+                <div class="section-title">美化结果（点击 ▾/▸ 折叠 / 展开）</div>
                 <div class="json-tree empty" id="jsonTree">美化结果将显示在这里...</div>
             </div>
         </div>
@@ -1058,7 +1074,7 @@ function formatJsonError(msg, raw) {
 }
 
 // ============================================================
-// 美化输出（树形视图 + 点击折叠）
+// 美化输出（json.cn 风格键值对折叠树）
 // ============================================================
 
 var jsonRawText = '';   // 标准 2 空格美化后的纯文本，供复制使用
@@ -1113,13 +1129,17 @@ function buildJsonNode(key, val, isLast) {
     var block = jEl('div', 'j-block');
     var line = jEl('div', 'j-line j-head');
     var isContainer = (val !== null && typeof val === 'object');
+    var caretExp = jEl('span', 'j-caret j-caret-expanded', '\u25BE');
+    var caretCol = jEl('span', 'j-caret j-caret-collapsed', '\u25B8');
+    var caretLeaf = jEl('span', 'j-caret j-caret-placeholder', '');
+    var commaSpan = comma ? jEl('span', 'j-punc', comma) : null;
 
-    // 叶子节点
+    // 叶子节点：键 + 值 + 逗号
     if (!isContainer) {
-        line.appendChild(jEl('span', 'j-caret leaf', '\u25BE'));
+        line.appendChild(caretLeaf);
         if (key !== null) line.appendChild(jEl('span', 'j-key', JSON.stringify(key) + ': '));
         line.appendChild(jValueEl(val));
-        if (comma) line.appendChild(jEl('span', 'j-punc', comma));
+        if (commaSpan) line.appendChild(commaSpan);
         block.appendChild(line);
         return block;
     }
@@ -1131,19 +1151,20 @@ function buildJsonNode(key, val, isLast) {
 
     // 空对象 / 空数组
     if (keys.length === 0) {
-        line.appendChild(jEl('span', 'j-caret leaf', '\u25BE'));
+        line.appendChild(caretLeaf);
         if (key !== null) line.appendChild(jEl('span', 'j-key', JSON.stringify(key) + ': '));
         line.appendChild(jEl('span', 'j-punc', open + close + comma));
         block.appendChild(line);
         return block;
     }
 
-    // 可折叠容器
-    line.appendChild(jEl('span', 'j-caret', '\u25BE'));
+    // 可折叠容器：展开显示 { / [，折叠显示 {...} / [N]
+    line.appendChild(caretExp);
+    line.appendChild(caretCol);
     if (key !== null) line.appendChild(jEl('span', 'j-key', JSON.stringify(key) + ': '));
-    line.appendChild(jEl('span', 'j-punc', open));
-    line.appendChild(jEl('span', 'j-count', keys.length + ' 项'));
-    line.appendChild(jEl('span', 'j-ellipsis', ' \u2026 ' + close + comma));
+    line.appendChild(jEl('span', 'j-open j-punc', open));
+    line.appendChild(jEl('span', 'j-folded j-punc', open + (isArr ? keys.length : '...') + close));
+    if (commaSpan) line.appendChild(commaSpan);
     block.appendChild(line);
 
     var children = jEl('div', 'j-children');
@@ -1151,11 +1172,6 @@ function buildJsonNode(key, val, isLast) {
         children.appendChild(buildJsonNode(isArr ? null : keys[i], val[keys[i]], i === keys.length - 1));
     }
     block.appendChild(children);
-
-    var tail = jEl('div', 'j-line j-tail');
-    tail.appendChild(jEl('span', 'j-caret leaf', '\u25BE'));
-    tail.appendChild(jEl('span', 'j-punc', close + comma));
-    block.appendChild(tail);
 
     return block;
 }
@@ -1172,10 +1188,21 @@ function renderJsonTree(value) {
     box.appendChild(buildJsonNode(null, value, true));
 }
 
-// 事件委托：点整行折叠 / 展开
+// 事件委托：点击折叠箭头或整行折叠 / 展开
 document.getElementById('jsonTree').addEventListener('click', function(e) {
     var node = e.target;
     while (node && node !== this) {
+        if (node.className && node.className.indexOf('j-caret') >= 0) {
+            var block = node.parentNode;
+            while (block && block !== this) {
+                if (block.className && block.className.indexOf('j-block') >= 0) break;
+                block = block.parentNode;
+            }
+            if (block && block !== this && block.className.indexOf('j-block') >= 0) {
+                block.classList.toggle('collapsed');
+            }
+            return;
+        }
         if (node.className && node.className.indexOf('j-head') >= 0) {
             if (node.parentNode.className.indexOf('j-block') >= 0) {
                 node.parentNode.classList.toggle('collapsed');
