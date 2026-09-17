@@ -581,6 +581,14 @@ body.json-mode .container { max-width: 1240px; }
 
     <!-- ============ JSON 面板 ============ -->
     <div class="panel" id="panel-json">
+        <div class="button-group" style="margin: 0 0 18px;">
+            <button class="button button-primary" onclick="trackVisit(jsonFormat)">格式化</button>
+            <button class="button button-secondary" onclick="trackVisit(jsonExpandAll)">全部展开</button>
+            <button class="button button-secondary" onclick="trackVisit(jsonCollapseAll)">全部折叠</button>
+            <button class="button button-secondary" onclick="trackVisit(jsonClear)">清空</button>
+            <button class="button button-success" onclick="trackVisit(jsonCopy)">复制结果</button>
+        </div>
+
         <div class="json-panes">
             <div class="json-pane">
                 <div class="section-title">输入 JSON</div>
@@ -595,14 +603,6 @@ body.json-mode .container { max-width: 1240px; }
         </div>
 
         <div class="message" id="jsonMessage"></div>
-
-        <div class="button-group">
-            <button class="button button-primary" onclick="trackVisit(jsonFormat)">格式化</button>
-            <button class="button button-secondary" onclick="trackVisit(jsonExpandAll)">全部展开</button>
-            <button class="button button-secondary" onclick="trackVisit(jsonCollapseAll)">全部折叠</button>
-            <button class="button button-secondary" onclick="trackVisit(jsonClear)">清空</button>
-            <button class="button button-success" onclick="trackVisit(jsonCopy)">复制结果</button>
-        </div>
 
         <div class="stats">
             <span class="stat-row">行数: <span class="stat-count" id="jsonLineDisplay">0</span></span>
