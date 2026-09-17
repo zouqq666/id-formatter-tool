@@ -465,16 +465,16 @@ body.json-mode .container { max-width: 1240px; }
 /* 折叠箭头：展开 ▾ / 折叠 ▸，仅容器节点可见 */
 .j-caret {
     display: inline-block;
-    width: 14px;
+    width: 16px;
     text-align: center;
     color: #666;
     -webkit-user-select: none;
     user-select: none;
-    font-size: 11px;
+    font-size: 10px;
 }
 .j-caret-expanded  { display: inline; }
 .j-caret-collapsed { display: none; }
-.j-caret-placeholder { display: inline-block; width: 14px; }
+.j-caret-placeholder { display: inline-block; width: 16px; }
 
 .j-block.collapsed .j-caret-expanded  { display: none; }
 .j-block.collapsed .j-caret-collapsed { display: inline; }
@@ -485,10 +485,10 @@ body.json-mode .container { max-width: 1240px; }
 .j-block.collapsed .j-open   { display: none; }
 .j-block.collapsed .j-folded { display: inline; }
 
-/* 子节点缩进，去掉虚线，纯缩进更贴近 json.cn */
+/* 子节点缩进：比父键 caret 多出 16px，层级感更明显 */
 .j-children {
     margin-left: 0;
-    padding-left: 20px;
+    padding-left: 32px;
 }
 
 /* 颜色方案 */
