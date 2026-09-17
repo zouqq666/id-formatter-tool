@@ -485,6 +485,9 @@ body.json-mode .container { max-width: 1240px; }
 .j-block.collapsed .j-open   { display: none; }
 .j-block.collapsed .j-folded { display: inline; }
 
+/* 折叠时隐藏子节点 */
+.j-block.collapsed > .j-children { display: none; }
+
 /* 子节点缩进：比父键 caret 多出 16px，层级感更明显 */
 .j-children {
     margin-left: 0;
