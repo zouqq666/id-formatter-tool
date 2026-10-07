@@ -466,6 +466,40 @@ textarea::placeholder {
     color: #333;
 }
 
+/* 压缩结果（单行，可横向滚动） */
+.json-min-wrap {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    gap: 8px;
+}
+
+#jsonMinified {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 240px;
+    padding: 12px 14px;
+    border: 2px solid #667eea;
+    border-radius: 12px;
+    background: #f7f9ff;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #333;
+    white-space: pre;
+    overflow: auto;
+    resize: none;
+}
+
+#jsonMinified:focus { outline: none; border-color: #764ba2; }
+
+.min-stats {
+    font-size: 12px;
+    color: #666;
+    min-height: 1.4em;
+}
+
 .json-tree.empty {
     color: #aaa;
     border-color: #e0e0e0;
@@ -625,8 +659,12 @@ textarea::placeholder {
             </div>
 
             <div class="json-pane">
-                <div class="section-title">美化结果（左侧输入即自动格式化 · 点击 ▾/▸ 折叠 / 展开）</div>
+                <div class="section-title" id="jsonResultTitle">美化结果（左侧输入即自动格式化 · 点击 ▾/▸ 折叠 / 展开）</div>
                 <div class="json-tree empty" id="jsonTree">美化结果将显示在这里...</div>
+                <div class="json-min-wrap" id="jsonMinWrap" style="display: none;">
+                    <textarea id="jsonMinified" readonly wrap="off" placeholder="压缩结果将显示在这里..."></textarea>
+                    <div class="min-stats" id="jsonMinStats"></div>
+                </div>
             </div>
         </div>
 
@@ -1248,6 +1286,22 @@ function jsonHideMessage() {
     document.getElementById('jsonMessage').className = 'message';
 }
 
+// 右侧视图切换：美化树 / 压缩结果
+var JSON_TREE_TITLE = '美化结果（左侧输入即自动格式化 · 点击 ▾/▸ 折叠 / 展开）';
+var JSON_MIN_TITLE  = '压缩结果（单行 · 可直接复制）';
+
+function jsonShowTree() {
+    document.getElementById('jsonTree').style.display = '';
+    document.getElementById('jsonMinWrap').style.display = 'none';
+    document.getElementById('jsonResultTitle').textContent = JSON_TREE_TITLE;
+}
+
+function jsonShowMin() {
+    document.getElementById('jsonTree').style.display = 'none';
+    document.getElementById('jsonMinWrap').style.display = 'flex';
+    document.getElementById('jsonResultTitle').textContent = JSON_MIN_TITLE;
+}
+
 // silent = true：输入时自动格式化，不弹提示条，只更新状态与右侧树
 function jsonFormat(silent) {
     var res = parseJsonInput();
@@ -1255,7 +1309,7 @@ function jsonFormat(silent) {
     if (!res.ok) {
         jsonIsValid = false;
         jsonSetStatus('无效', false);
-        if (silent) { jsonHideMessage(); return; }
+        if (silent) { jsonHideMessage(); jsonShowTree(); return; }
         document.getElementById('jsonLineDisplay').textContent = '0';
         document.getElementById('jsonNodeDisplay').textContent = '0';
         jsonShowMessage(res.empty ? '请输入 JSON 内容' : formatJsonError(res.error, raw), 'error');
@@ -1269,10 +1323,12 @@ function jsonFormat(silent) {
         jsonIsValid = true;
         jsonSetStatus('内容过大，点「格式化」渲染', null);
         jsonHideMessage();
+        jsonShowTree();
         return;
     }
 
     jsonRawText = JSON.stringify(val, null, 2);
+    jsonShowTree();
     renderJsonTree(val);
 
     // 数据量大时自动折叠，避免一次铺开几万行
@@ -1297,7 +1353,7 @@ function jsonFormat(silent) {
     jsonShowMessage('\u2713 格式化完成' + (autoCollapsed ? '（数据较大已自动折叠，点击 \u25BE 展开）' : ''), 'success');
 }
 
-// 压缩：去掉所有空白与换行，结果写回左侧输入框，右侧树同步更新
+// 压缩：结果单行展示在右侧，左侧输入保持不变
 function jsonMinify() {
     var res = parseJsonInput();
     if (!res.ok) {
@@ -1310,11 +1366,15 @@ function jsonMinify() {
     var before = document.getElementById('jsonInput').value.trim().length;
     var min = JSON.stringify(res.value);
     var after = min.length;
-    var input = document.getElementById('jsonInput');
-    input.value = min;
-    input.dispatchEvent(new Event('input'));   // 同步字符统计与右侧树
     var pct = before > 0 ? Math.round((1 - after / before) * 100) : 0;
-    jsonShowMessage('\u2713 已压缩：' + before + ' \u2192 ' + after + ' 字符（省 ' + pct + '%）', 'success');
+
+    document.getElementById('jsonMinified').value = min;
+    document.getElementById('jsonMinStats').textContent =
+        '压缩前 ' + before + ' 字符 → 压缩后 ' + after + ' 字符（省 ' + pct + '%）';
+    jsonShowMin();
+    jsonIsValid = true;
+    jsonSetStatus('有效', true);
+    jsonShowMessage('\u2713 已压缩为一行：' + before + ' \u2192 ' + after + ' 字符（省 ' + pct + '%）', 'success');
 }
 
 function jsonExpandAll() {
@@ -1346,6 +1406,9 @@ function jsonClear() {
     jsonRawText = '';
     jsonIsValid = false;
     renderJsonTree(undefined);
+    document.getElementById('jsonMinified').value = '';
+    document.getElementById('jsonMinStats').textContent = '';
+    jsonShowTree();
     jsonSetStatus('待输入', null);
     document.getElementById('jsonLineDisplay').textContent = '0';
     document.getElementById('jsonNodeDisplay').textContent = '0';
@@ -1354,8 +1417,11 @@ function jsonClear() {
 }
 
 function jsonCopy() {
-    if (!jsonRawText) { jsonShowMessage('暂无内容可复制', 'error'); return; }
-    copyText(jsonRawText, function(ok) {
+    // 右侧显示压缩结果时，复制压缩文本；否则复制美化文本
+    var minWrap = document.getElementById('jsonMinWrap');
+    var text = (minWrap.style.display === 'flex') ? document.getElementById('jsonMinified').value : jsonRawText;
+    if (!text) { jsonShowMessage('暂无内容可复制', 'error'); return; }
+    copyText(text, function(ok) {
         jsonShowMessage(ok ? '\u2713 已复制到剪贴板' : '复制失败，请手动复制', ok ? 'success' : 'error');
     });
 }
