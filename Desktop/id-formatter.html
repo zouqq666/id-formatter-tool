@@ -624,7 +624,7 @@ textarea::placeholder {
             </div>
 
             <div class="json-pane">
-                <div class="section-title">美化结果（点击 ▾/▸ 折叠 / 展开）</div>
+                <div class="section-title">美化结果（左侧输入即自动格式化 · 点击 ▾/▸ 折叠 / 展开）</div>
                 <div class="json-tree empty" id="jsonTree">美化结果将显示在这里...</div>
             </div>
         </div>
@@ -1243,20 +1243,35 @@ document.getElementById('jsonTree').addEventListener('click', function(e) {
     }
 });
 
-function jsonFormat() {
+function jsonHideMessage() {
+    document.getElementById('jsonMessage').className = 'message';
+}
+
+// silent = true：输入时自动格式化，不弹提示条，只更新状态与右侧树
+function jsonFormat(silent) {
     var res = parseJsonInput();
     var raw = document.getElementById('jsonInput').value.trim();
     if (!res.ok) {
         jsonIsValid = false;
         jsonSetStatus('无效', false);
+        if (silent) { jsonHideMessage(); return; }
         document.getElementById('jsonLineDisplay').textContent = '0';
         document.getElementById('jsonNodeDisplay').textContent = '0';
         jsonShowMessage(res.empty ? '请输入 JSON 内容' : formatJsonError(res.error, raw), 'error');
         return;
     }
     var val = res.value;
-    jsonRawText = JSON.stringify(val, null, 2);
     var nodes = jsonNodeCount(val);
+
+    // 自动格式化时，超大 JSON 跳过渲染，避免卡顿（点「格式化」按钮强制渲染）
+    if (silent && nodes > 20000) {
+        jsonIsValid = true;
+        jsonSetStatus('内容过大，点「格式化」渲染', null);
+        jsonHideMessage();
+        return;
+    }
+
+    jsonRawText = JSON.stringify(val, null, 2);
     renderJsonTree(val);
 
     // 数据量大时自动折叠，避免一次铺开几万行
@@ -1277,6 +1292,7 @@ function jsonFormat() {
     document.getElementById('jsonLineDisplay').textContent = jsonRawText.split('\n').length;
     document.getElementById('jsonNodeDisplay').textContent = nodes;
     document.getElementById('jsonLenDisplay').textContent = jsonRawText.length;
+    if (silent) { jsonHideMessage(); return; }
     jsonShowMessage('\u2713 格式化完成' + (autoCollapsed ? '（数据较大已自动折叠，点击 \u25BE 展开）' : ''), 'success');
 }
 
@@ -1322,15 +1338,31 @@ function jsonCopy() {
         jsonShowMessage(ok ? '\u2713 已复制到剪贴板' : '复制失败，请手动复制', ok ? 'success' : 'error');
     });
 }
+// 输入即自动格式化到右侧（防抖 250ms）
+var jsonAutoTimer = null;
 document.getElementById('jsonInput').addEventListener('input', function() {
-    if (!this.value.trim()) {
-        jsonSetStatus('待输入', null);
-    } else {
-        var res = parseJsonInput();
-        jsonIsValid = res.ok;
-        jsonSetStatus(res.ok ? '有效' : '无效', res.ok);
-    }
     document.getElementById('jsonLenDisplay').textContent = this.value.length;
+    if (!this.value.trim()) {
+        clearTimeout(jsonAutoTimer);
+        jsonIsValid = false;
+        jsonRawText = '';
+        renderJsonTree(undefined);
+        jsonSetStatus('待输入', null);
+        document.getElementById('jsonLineDisplay').textContent = '0';
+        document.getElementById('jsonNodeDisplay').textContent = '0';
+        jsonHideMessage();
+        return;
+    }
+    clearTimeout(jsonAutoTimer);
+    jsonAutoTimer = setTimeout(function() { jsonFormat(true); }, 250);
+});
+
+// 粘贴后立即格式化，不用等防抖
+document.getElementById('jsonInput').addEventListener('paste', function() {
+    var self = this;
+    setTimeout(function() {
+        self.dispatchEvent(new Event('input'));
+    }, 0);
 });
 
 // 支持 Ctrl/Cmd + Enter 快速格式化
