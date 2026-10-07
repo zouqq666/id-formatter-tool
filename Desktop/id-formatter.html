@@ -610,6 +610,7 @@ textarea::placeholder {
     <div class="panel" id="panel-json">
         <div class="button-group" style="margin: 0 0 18px;">
             <button class="button button-primary" onclick="trackVisit(jsonFormat)">格式化</button>
+            <button class="button button-secondary" onclick="trackVisit(jsonMinify)">压缩</button>
             <button class="button button-secondary" onclick="trackVisit(jsonExpandAll)">全部展开</button>
             <button class="button button-secondary" onclick="trackVisit(jsonCollapseAll)">全部折叠</button>
             <button class="button button-secondary" onclick="trackVisit(jsonClear)">清空</button>
@@ -1294,6 +1295,26 @@ function jsonFormat(silent) {
     document.getElementById('jsonLenDisplay').textContent = jsonRawText.length;
     if (silent) { jsonHideMessage(); return; }
     jsonShowMessage('\u2713 格式化完成' + (autoCollapsed ? '（数据较大已自动折叠，点击 \u25BE 展开）' : ''), 'success');
+}
+
+// 压缩：去掉所有空白与换行，结果写回左侧输入框，右侧树同步更新
+function jsonMinify() {
+    var res = parseJsonInput();
+    if (!res.ok) {
+        var raw0 = document.getElementById('jsonInput').value.trim();
+        jsonIsValid = false;
+        jsonSetStatus('无效', false);
+        jsonShowMessage(res.empty ? '请输入 JSON 内容' : '无法压缩：' + formatJsonError(res.error, raw0), 'error');
+        return;
+    }
+    var before = document.getElementById('jsonInput').value.trim().length;
+    var min = JSON.stringify(res.value);
+    var after = min.length;
+    var input = document.getElementById('jsonInput');
+    input.value = min;
+    input.dispatchEvent(new Event('input'));   // 同步字符统计与右侧树
+    var pct = before > 0 ? Math.round((1 - after / before) * 100) : 0;
+    jsonShowMessage('\u2713 已压缩：' + before + ' \u2192 ' + after + ' 字符（省 ' + pct + '%）', 'success');
 }
 
 function jsonExpandAll() {
