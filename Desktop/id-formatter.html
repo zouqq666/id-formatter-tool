@@ -226,8 +226,8 @@ body {
 
 textarea {
     width: 100%;
-    height: auto;
-    flex: 1 1 auto;
+    flex: 0 0 auto;
+    height: 180px;
     min-height: 150px;
     padding: 15px;
     border: 2px solid #e0e0e0;
@@ -357,7 +357,14 @@ textarea::placeholder {
     min-height: 0;
 }
 
+#inputBox {
+    height: 200px;
+}
+
 #outputBox {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 240px;
     background: #f0f4ff;
     border-color: #667eea;
 }
@@ -523,7 +530,8 @@ textarea::placeholder {
 
 @media (max-width: 900px) {
     .json-panes { grid-template-columns: 1fr; }
-    #inputBox, #outputBox, #jsonInput, .json-tree { min-height: 220px; }
+    #inputBox { min-height: 180px; }
+    #outputBox, #jsonInput, .json-tree { min-height: 220px; }
 }
 
 @media (max-width: 600px) {
