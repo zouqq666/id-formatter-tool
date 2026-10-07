@@ -15,19 +15,22 @@ body {
     font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     min-height: 100vh;
-    padding: 40px 20px;
+    padding: 20px;
     display: flex;
     justify-content: center;
-    align-items: center;
+    align-items: stretch;
 }
 
 .container {
     background: white;
     border-radius: 20px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-    padding: 40px;
-    max-width: 800px;
+    padding: 30px;
+    max-width: 1400px;
     width: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     animation: fadeIn 0.5s ease-out;
 }
 
@@ -105,7 +108,13 @@ body {
 }
 
 .panel { display: none; }
-.panel.active { display: block; animation: fadeIn 0.3s ease-out; }
+.panel.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    animation: fadeIn 0.3s ease-out;
+}
 
 .stats-bar {
     background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
@@ -217,7 +226,9 @@ body {
 
 textarea {
     width: 100%;
-    height: 150px;
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 150px;
     padding: 15px;
     border: 2px solid #e0e0e0;
     border-radius: 12px;
@@ -340,6 +351,10 @@ textarea::placeholder {
 
 .output-section {
     margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 #outputBox {
@@ -407,20 +422,22 @@ textarea::placeholder {
 
 /* ---------- JSON 面板：左右分栏 + json.cn 风格键值对折叠树 ---------- */
 .container { transition: max-width 0.25s ease; }
-body.json-mode .container { max-width: 1240px; }
 
 .json-panes {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 18px;
-    align-items: start;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
-.json-pane { display: flex; flex-direction: column; min-width: 0; }
+.json-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 #jsonInput {
-    min-height: 460px;
-    height: 460px;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 240px;
     resize: vertical;
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     font-size: 13px;
@@ -428,8 +445,9 @@ body.json-mode .container { max-width: 1240px; }
 }
 
 .json-tree {
-    height: 460px;
-    min-height: 460px;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 240px;
     overflow: auto;
     padding: 12px 14px;
     border: 2px solid #667eea;
@@ -505,6 +523,7 @@ body.json-mode .container { max-width: 1240px; }
 
 @media (max-width: 900px) {
     .json-panes { grid-template-columns: 1fr; }
+    #inputBox, #outputBox, #jsonInput, .json-tree { min-height: 220px; }
 }
 
 @media (max-width: 600px) {
