@@ -358,7 +358,9 @@ textarea::placeholder {
 }
 
 #inputBox {
-    height: 200px;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 240px;
 }
 
 #outputBox {
@@ -425,6 +427,91 @@ textarea::placeholder {
 .stat-count {
     font-weight: 600;
     color: #667eea;
+}
+
+/* ---------- ID 面板：左右分栏 ---------- */
+.id-panes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.id-pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+.id-pane.output-section {
+    margin-top: 0;
+}
+
+/* ---------- ID 面板：顶部操作栏 ---------- */
+.id-toolbar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: nowrap;
+    margin-bottom: 18px;
+}
+
+.id-toolbar .options,
+.id-toolbar .button-group {
+    margin: 0;
+}
+
+.id-toolbar .options {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+}
+
+.id-toolbar .options .section-title {
+    margin-bottom: 0;
+}
+
+.id-toolbar .quote-options {
+    gap: 8px;
+}
+
+.id-toolbar .quote-option {
+    padding: 4px 8px;
+}
+
+.id-toolbar .button-group {
+    flex: 0 0 auto;
+    gap: 8px;
+}
+
+.id-toolbar .button {
+    padding: 8px 14px;
+}
+
+.id-toolbar {
+    justify-content: space-between;
+}
+
+.output-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+
+.output-actions .button {
+    padding: 8px 14px;
+}
+
+@media (max-width: 900px) {
+    .id-toolbar {
+        flex-wrap: wrap;
+        gap: 10px;
+    }
 }
 
 /* ---------- JSON 面板：左右分栏 + json.cn 风格键值对折叠树 ---------- */
@@ -563,7 +650,7 @@ textarea::placeholder {
 .j-count { color: #999; font-size: 11px; margin-left: 4px; }
 
 @media (max-width: 900px) {
-    .json-panes { grid-template-columns: 1fr; }
+    .id-panes, .json-panes { grid-template-columns: 1fr; }
     #inputBox { min-height: 180px; }
     #outputBox, #jsonInput, .json-tree { min-height: 220px; }
 }
@@ -593,51 +680,54 @@ textarea::placeholder {
 
     <!-- ============ ID 面板 ============ -->
     <div class="panel active" id="panel-id">
-        <div class="section-title">输入ID（换行/逗号/空格分隔）</div>
-        <textarea id="inputBox" placeholder="示例输入：
+        <div class="id-toolbar">
+            <div class="options">
+                <div class="section-title">包裹符号</div>
+                <div class="quote-options">
+                    <label class="quote-option">
+                        <input type="radio" name="quote" value="'" checked>
+                        <span>单引号 '</span>
+                    </label>
+                    <label class="quote-option">
+                        <input type="radio" name="quote" value='"'>
+                        <span>双引号 "</span>
+                    </label>
+                    <label class="quote-option">
+                        <input type="radio" name="quote" value="">
+                        <span>无符号</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button class="button button-primary" onclick="trackVisit(forward)">正向拼接</button>
+                <button class="button button-secondary" onclick="trackVisit(reverse)">反向拆分</button>
+                <button class="button button-secondary" onclick="trackVisit(distinct)">去除重复</button>
+                <button class="button button-secondary" onclick="trackVisit(clearAll)">清空全部</button>
+                <button class="button button-success" onclick="trackVisit(copy)">复制结果</button>
+            </div>
+        </div>
+
+        <div class="id-panes">
+            <div class="id-pane">
+                <div class="section-title">输入ID（换行/逗号/空格分隔）</div>
+                <textarea id="inputBox" placeholder="示例输入：
 123
 456
 789"></textarea>
+            </div>
+
+            <div class="id-pane output-section">
+                <div class="section-title">转换结果</div>
+                <textarea id="outputBox" readonly placeholder="转换结果将显示在这里..."></textarea>
+                <div class="stats">
+                    <span class="stat-row">数量: <span class="stat-count" id="countDisplay">0</span></span>
+                    <span class="stat-row">长度: <span class="stat-count" id="lengthDisplay">0</span> 字符</span>
+                </div>
+            </div>
+        </div>
 
         <div class="message" id="message"></div>
-
-        <div class="options">
-            <div class="section-title">包裹符号</div>
-            <div class="quote-options">
-                <label class="quote-option">
-                    <input type="radio" name="quote" value="'" checked>
-                    <span>单引号 '</span>
-                </label>
-                <label class="quote-option">
-                    <input type="radio" name="quote" value='"'>
-                    <span>双引号 "</span>
-                </label>
-                <label class="quote-option">
-                    <input type="radio" name="quote" value="">
-                    <span>无符号</span>
-                </label>
-            </div>
-        </div>
-
-        <div class="button-group">
-            <button class="button button-primary" onclick="trackVisit(forward)">正向拼接</button>
-            <button class="button button-secondary" onclick="trackVisit(reverse)">反向拆分</button>
-            <button class="button button-secondary" onclick="trackVisit(distinct)">去除重复</button>
-            <button class="button button-secondary" onclick="trackVisit(clearAll)">清空全部</button>
-        </div>
-
-        <div class="output-section">
-            <div class="section-title">转换结果</div>
-            <textarea id="outputBox" readonly placeholder="转换结果将显示在这里..."></textarea>
-            <div class="stats">
-                <span class="stat-row">数量: <span class="stat-count" id="countDisplay">0</span></span>
-                <span class="stat-row">长度: <span class="stat-count" id="lengthDisplay">0</span> 字符</span>
-            </div>
-        </div>
-
-        <div class="button-group" style="margin-top: 20px;">
-            <button class="button button-success" onclick="trackVisit(copy)">复制结果</button>
-        </div>
     </div>
 
     <!-- ============ JSON 面板 ============ -->
