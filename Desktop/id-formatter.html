@@ -866,7 +866,13 @@ function fetchWithTimeout(url, options) {
     var timer = setTimeout(function() {
         if (controller) controller.abort();
     }, 5000);
-    var opts = options || {};
+    // 浅拷贝 options，避免污染调用方传入的对象（signal 写入原对象后复用会导致后续 fetch 被 abort）
+    var opts = {};
+    if (options) {
+        for (var k in options) {
+            if (Object.prototype.hasOwnProperty.call(options, k)) opts[k] = options[k];
+        }
+    }
     if (controller) opts.signal = controller.signal;
     return fetch(url, opts).finally(function() {
         clearTimeout(timer);
@@ -993,8 +999,9 @@ function trackVisitOnline() {
                 throw new Error(json.error || 'unknown');
             }
         })
-        .catch(function() {
+        .catch(function(err) {
             setMode('offline');
+            console.warn('[trackVisitOnline] 上报失败:', err && err.message ? err.message : err);
         });
 }
 
@@ -1006,10 +1013,16 @@ function fetchStats() {
 }
 
 function trackVisit(callback) {
-    if (callback && typeof callback === 'function') {
-        callback();
-    }
+    // 先上报统计，再执行业务回调——确保即使回调抛异常也不影响统计
     trackVisitOnline();
+    if (callback && typeof callback === 'function') {
+        try {
+            callback();
+        } catch (e) {
+            // 业务回调异常不应中断页面其他逻辑
+            console.warn('[trackVisit] callback error:', e);
+        }
+    }
 }
 
 // ============================================================
