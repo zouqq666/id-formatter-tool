@@ -694,6 +694,7 @@ textarea::placeholder {
     <div class="tabs">
         <button class="tab active" id="tabId" onclick="switchTab('id')">ID 格式化</button>
         <button class="tab" id="tabJson" onclick="switchTab('json')">JSON 格式化</button>
+        <button class="tab" id="tabYaml" onclick="switchTab('yaml')">YAML → JSON</button>
     </div>
 
     <!-- ============ ID 面板 ============ -->
@@ -783,6 +784,35 @@ textarea::placeholder {
             <span class="stat-row">节点: <span class="stat-count" id="jsonNodeDisplay">0</span></span>
             <span class="stat-row">字符: <span class="stat-count" id="jsonLenDisplay">0</span></span>
             <span class="stat-row">状态: <span class="stat-count" id="jsonStatus">待输入</span></span>
+        </div>
+    </div>
+
+    <!-- ============ YAML → JSON 面板 ============ -->
+    <div class="panel" id="panel-yaml">
+        <div class="button-group" style="margin: 0 0 18px;">
+            <button class="button button-primary" onclick="trackVisit(yamlFormat)">转换</button>
+            <button class="button button-secondary" onclick="trackVisit(yamlClear)">清空</button>
+            <button class="button button-success" onclick="trackVisit(yamlCopy)">复制 JSON</button>
+        </div>
+
+        <div class="json-panes">
+            <div class="json-pane">
+                <div class="section-title">输入 YAML</div>
+                <textarea id="yamlInput" placeholder="粘贴 YAML 内容，左侧输入即自动转换为 JSON..." spellcheck="false"></textarea>
+            </div>
+
+            <div class="json-pane">
+                <div class="section-title" id="yamlResultTitle">JSON 结果（左侧输入即自动转换 · 点击 ▾/▸ 折叠 / 展开）</div>
+                <div class="json-tree empty" id="yamlTree">JSON 结果将显示在这里...</div>
+            </div>
+        </div>
+
+        <div class="message" id="yamlMessage"></div>
+
+        <div class="stats">
+            <span class="stat-row">字符: <span class="stat-count" id="yamlLenDisplay">0</span></span>
+            <span class="stat-row">节点: <span class="stat-count" id="yamlNodeDisplay">0</span></span>
+            <span class="stat-row">状态: <span class="stat-count" id="yamlStatus">待输入</span></span>
         </div>
     </div>
 
@@ -1141,9 +1171,12 @@ document.getElementById('inputBox').addEventListener('input', function() {
 function switchTab(name) {
     document.getElementById('tabId').classList.toggle('active', name === 'id');
     document.getElementById('tabJson').classList.toggle('active', name === 'json');
+    document.getElementById('tabYaml').classList.toggle('active', name === 'yaml');
     document.getElementById('panel-id').classList.toggle('active', name === 'id');
     document.getElementById('panel-json').classList.toggle('active', name === 'json');
+    document.getElementById('panel-yaml').classList.toggle('active', name === 'yaml');
     document.body.classList.toggle('json-mode', name === 'json');
+    if (name === 'yaml') ensureYamlDemo();
     try { localStorage.setItem('id_formatter_tab', name); } catch (e) {}
 }
 
@@ -1366,12 +1399,12 @@ function buildJsonNode(key, val, isLast) {
     return block;
 }
 
-function renderJsonTree(value) {
-    var box = document.getElementById('jsonTree');
+function renderJsonTree(value, treeId, emptyText) {
+    var box = document.getElementById(treeId || 'jsonTree');
     box.innerHTML = '';
     if (value === undefined) {
         box.className = 'json-tree empty';
-        box.textContent = '美化结果将显示在这里...';
+        box.textContent = emptyText || '美化结果将显示在这里...';
         return;
     }
     box.className = 'json-tree';
@@ -1581,6 +1614,351 @@ document.getElementById('jsonInput').addEventListener('keydown', function(e) {
     }
 });
 
+// 轻量 YAML -> JSON 解析器（语义层 YAML 子集：嵌套 map/seq、块标量 | >、流集合 [] {}、标量类型推断、注释剥离）
+// 纯前端、无依赖，供浏览器内联使用；此处仅用于本地验证。
+function parseYaml(text) {
+  var rawLines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  var lines = [];
+  for (var li = 0; li < rawLines.length; li++) {
+    var raw = rawLines[li];
+    if (/^---/.test(raw)) { lines.push({ indent: 0, content: '', blank: true }); continue; }
+    var indent = raw.length - raw.replace(/^\s+/, '').length;
+    var content = raw.slice(indent);
+    if (content.trim() === '') lines.push({ indent: indent, content: '', blank: true });
+    else lines.push({ indent: indent, content: content, blank: false });
+  }
+  var pos = 0;
+
+  function peek() {
+    while (pos < lines.length) {
+      var l = lines[pos];
+      if (l.blank) { pos++; continue; }
+      if (l.content.trim().charAt(0) === '#') { pos++; continue; }
+      break;
+    }
+    return pos < lines.length ? lines[pos] : null;
+  }
+  function isTopColon(s) {
+    var inS = false, inD = false;
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (c === "'" && !inD) inS = !inS;
+      else if (c === '"' && !inS) inD = !inD;
+      else if (!inS && !inD && c === ':') {
+        if (i === 0) continue;
+        if (i === s.length - 1 || /\s/.test(s[i + 1])) return i;
+      }
+    }
+    return -1;
+  }
+  function isMappingLine(s) {
+    s = s.trim();
+    var colon = isTopColon(s);
+    if (colon < 0) return false;
+    var before = s.slice(0, colon).trim();
+    if (before === '') return false;
+    if (/[\[\{<>]/.test(before)) return false;
+    if (s.indexOf('://') > 0 && colon === s.indexOf(':')) return false;
+    return true;
+  }
+  function stripComment(s) {
+    var inS = false, inD = false;
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (c === "'" && !inD) inS = !inS;
+      else if (c === '"' && !inS) inD = !inD;
+      else if (c === '#' && !inS && !inD) {
+        if (i === 0 || /\s/.test(s[i - 1])) return s.slice(0, i);
+      }
+    }
+    return s;
+  }
+  function parseScalar(str) {
+    str = str.trim();
+    if (str === '') return '';
+    if (str.charAt(0) === '"' || str.charAt(0) === "'") {
+      var q = str.charAt(0);
+      var inner = str.slice(1, str.lastIndexOf(q));
+      if (q === "'") inner = inner.replace(/''/g, "'");
+      else inner = inner.replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
+      return inner;
+    }
+    if (str === 'null' || str === '~' || str === 'Null' || str === 'NULL') return null;
+    if (str === 'true' || str === 'True' || str === 'TRUE') return true;
+    if (str === 'false' || str === 'False' || str === 'FALSE') return false;
+    if (/^-?\d+$/.test(str)) return parseInt(str, 10);
+    if (/^-?\d+\.\d+([eE][+-]?\d+)?$/.test(str)) return parseFloat(str);
+    if (/^-?\d+[eE][+-]?\d+$/.test(str)) return parseFloat(str);
+    return str;
+  }
+  function splitTop(s, sep) {
+    var depth = 0, inS = false, inD = false, res = [], cur = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s[i];
+      if (c === "'" && !inD) inS = !inS;
+      else if (c === '"' && !inS) inD = !inD;
+      else if (!inS && !inD) {
+        if (c === '[' || c === '{') depth++;
+        else if (c === ']' || c === '}') depth--;
+        else if (c === sep && depth === 0) { res.push(cur); cur = ''; continue; }
+      }
+      cur += c;
+    }
+    res.push(cur);
+    return res;
+  }
+  function parseFlowValue(s) {
+    s = s.trim();
+    if (s === '') return '';
+    if (s.charAt(0) === '[') return parseFlowSeq(s);
+    if (s.charAt(0) === '{') return parseFlowMap(s);
+    return parseScalar(s);
+  }
+  function parseFlowSeq(s) {
+    var inner = s.slice(1, s.lastIndexOf(']'));
+    inner = inner.trim();
+    if (inner === '') return [];
+    return splitTop(inner, ',').map(function (x) { return parseFlowValue(x.trim()); });
+  }
+  function parseFlowMap(s) {
+    var inner = s.slice(1, s.lastIndexOf('}'));
+    inner = inner.trim();
+    if (inner === '') return {};
+    var obj = {};
+    splitTop(inner, ',').forEach(function (pair) {
+      var kv = splitTop(pair, ':');
+      if (kv.length >= 2) {
+        var k = parseScalar(kv[0].trim());
+        var v = parseFlowValue(kv.slice(1).join(':').trim());
+        obj[k] = v;
+      }
+    });
+    return obj;
+  }
+  function parseBlockScalar(baseIndent, style) {
+    var parts = [];
+    while (pos < lines.length) {
+      var l = lines[pos];
+      if (l.blank) { parts.push({ blank: true }); pos++; continue; }
+      if (l.content.trim().charAt(0) === '#') { pos++; continue; }
+      if (l.indent <= baseIndent) break;
+      parts.push(l.content);
+      pos++;
+    }
+    if (style === '>') {
+      var paras = [], cur = [];
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].blank) { if (cur.length) { paras.push(cur.join(' ')); cur = []; } paras.push(''); }
+        else cur.push(parts[i]);
+      }
+      if (cur.length) paras.push(cur.join(' '));
+      return paras.join('\n');
+    } else {
+      var out = [];
+      for (var j = 0; j < parts.length; j++) out.push(parts[j].blank ? '' : parts[j]);
+      return out.join('\n');
+    }
+  }
+  function parseMapping(indent) {
+    var obj = {};
+    for (;;) {
+      var l = peek();
+      if (!l) break;
+      if (l.blank) { pos++; continue; }
+      if (l.indent < indent) break;
+      if (l.indent > indent) { pos++; continue; }
+      var text = stripComment(l.content);
+      pos++;
+      var colon = isTopColon(text);
+      if (colon < 0) continue;
+      var key = parseScalar(text.slice(0, colon).trim());
+      var rest = text.slice(colon + 1).trim();
+      if (rest === '') {
+        var nxt = peek();
+        if (!nxt || nxt.indent <= indent) { obj[key] = null; continue; }
+        var nc = nxt.content.trim().charAt(0);
+        if (nc === '-') obj[key] = parseSequence(nxt.indent);
+        else if (nc === '|' || nc === '>') obj[key] = parseBlockScalar(nxt.indent, nc);
+        else obj[key] = parseMapping(nxt.indent);
+      } else if (rest.charAt(0) === '[' || rest.charAt(0) === '{') {
+        obj[key] = parseFlowValue(rest);
+      } else if (rest.charAt(0) === '|' || rest.charAt(0) === '>') {
+        obj[key] = parseBlockScalar(indent, rest.charAt(0));
+      } else {
+        obj[key] = parseScalar(rest);
+      }
+    }
+    return obj;
+  }
+  function parseSequence(indent) {
+    var arr = [];
+    for (;;) {
+      var l = peek();
+      if (!l) break;
+      if (l.blank) { pos++; continue; }
+      if (l.indent < indent) break;
+      if (l.indent > indent) { pos++; continue; }
+      var text = stripComment(l.content);
+      if (!(text.trim() === '-' || text.trim().indexOf('- ') === 0)) break;
+      pos++;
+      var after = text.replace(/^-\s?/, '');
+      var nSpaces = text.length - text.replace(/^-\s*/, '').length - 1;
+      var childIndent = indent + 1 + nSpaces;
+      if (after.trim() === '') {
+        var nxt = peek();
+        if (!nxt || nxt.indent <= indent) arr.push(null);
+        else arr.push(parseBlock(nxt.indent));
+      } else if (isMappingLine(after)) {
+        lines[pos - 1].content = after.trim();
+        lines[pos - 1].indent = childIndent;
+        lines[pos - 1].blank = false;
+        pos--;
+        arr.push(parseMapping(childIndent));
+      } else if (after.trim().charAt(0) === '[' || after.trim().charAt(0) === '{') {
+        arr.push(parseFlowValue(after.trim()));
+      } else {
+        arr.push(parseScalar(after.trim()));
+      }
+    }
+    return arr;
+  }
+  function parseBlock(indent) {
+    var l = peek();
+    if (!l) return null;
+    var t = stripComment(l.content).trim();
+    if (t.indexOf('- ') === 0 || t === '-') return parseSequence(indent);
+    return parseMapping(indent);
+  }
+  var first = peek();
+  if (!first) return null;
+  var t0 = stripComment(first.content).trim();
+  if (t0.indexOf('- ') === 0 || t0 === '-') return parseSequence(first.indent);
+  return parseMapping(first.indent);
+}
+
+// ============================================================
+// YAML → JSON 功能模块（纯前端，无 CDN / 无后端依赖）
+// ============================================================
+var yamlRawText = '';
+var YAML_DEMO = `metrics:
+  - metric_id: invoice_amount_tax_included
+    metric_name: 开票金额含税
+    aliases: [开票金额, 含税金额]
+    measure:
+      expr: sum(kzwi4_h)
+    cal_time_field: t.fkdat
+    default_filters:
+      - "t.kunag not in (select partner from m_md_bp_disorg_common_h where inner_cus=Y)"
+  - metric_id: receive_payment_ratio
+    measure:
+      expr: >
+        sum(dmbtr_sum) / sum(kzwi4) * 100
+dimensions:
+  - dim_id: province
+    name: 省公司
+    fields: {id_field: xa_reig, name_field: xa_reig_txt}
+source_table_info:
+  - table_name: ccs_dwd_add_value_sd_base_h
+    is_main: true`;
+
+function yamlShowMessage(msg, type) {
+    var el = document.getElementById('yamlMessage');
+    el.textContent = msg;
+    el.className = 'message ' + type;
+    setTimeout(function() { el.className = 'message'; }, 3000);
+}
+
+function yamlSetStatus(text, ok) {
+    var el = document.getElementById('yamlStatus');
+    el.textContent = text;
+    el.style.color = ok === true ? '#2b8a3e' : (ok === false ? '#c53030' : '#667eea');
+}
+
+function yamlFormat(silent) {
+    var raw = document.getElementById('yamlInput').value;
+    if (!raw.trim()) {
+        yamlRawText = '';
+        renderJsonTree(undefined, 'yamlTree', 'JSON 结果将显示在这里...');
+        yamlSetStatus('待输入', null);
+        document.getElementById('yamlLenDisplay').textContent = '0';
+        document.getElementById('yamlNodeDisplay').textContent = '0';
+        if (silent) return;
+        yamlShowMessage('请输入 YAML 内容', 'error');
+        return;
+    }
+    var val;
+    try {
+        val = parseYaml(raw);
+    } catch (e) {
+        yamlRawText = '';
+        yamlSetStatus('无效', false);
+        yamlShowMessage('YAML 解析失败：' + (e && e.message ? e.message : e), 'error');
+        return;
+    }
+    yamlRawText = JSON.stringify(val, null, 2);
+    renderJsonTree(val, 'yamlTree', 'JSON 结果将显示在这里...');
+    var nodes = jsonNodeCount(val);
+    yamlSetStatus('有效', true);
+    document.getElementById('yamlLenDisplay').textContent = yamlRawText.length;
+    document.getElementById('yamlNodeDisplay').textContent = nodes;
+    if (silent) return;
+    yamlShowMessage('✓ 转换完成（共 ' + nodes + ' 个节点）', 'success');
+}
+
+function yamlClear() {
+    document.getElementById('yamlInput').value = '';
+    yamlRawText = '';
+    renderJsonTree(undefined, 'yamlTree', 'JSON 结果将显示在这里...');
+    yamlSetStatus('待输入', null);
+    document.getElementById('yamlLenDisplay').textContent = '0';
+    document.getElementById('yamlNodeDisplay').textContent = '0';
+    yamlShowMessage('✓ 已清空所有内容', 'error');
+}
+
+function yamlCopy() {
+    if (!yamlRawText) { yamlShowMessage('暂无内容可复制', 'error'); return; }
+    copyText(yamlRawText, function(ok) {
+        yamlShowMessage(ok ? '✓ 已复制 JSON 到剪贴板' : '复制失败，请手动复制', ok ? 'success' : 'error');
+    });
+}
+
+var yamlDemoLoaded = false;
+function ensureYamlDemo() {
+    var input = document.getElementById('yamlInput');
+    if (input.value.trim()) return;
+    if (yamlDemoLoaded) return;
+    input.value = YAML_DEMO;
+    yamlDemoLoaded = true;
+    yamlFormat(true);
+}
+
+var yamlAutoTimer = null;
+document.getElementById('yamlInput').addEventListener('input', function() {
+    document.getElementById('yamlLenDisplay').textContent = this.value.length;
+    if (!this.value.trim()) {
+        clearTimeout(yamlAutoTimer);
+        yamlRawText = '';
+        renderJsonTree(undefined, 'yamlTree', 'JSON 结果将显示在这里...');
+        yamlSetStatus('待输入', null);
+        document.getElementById('yamlNodeDisplay').textContent = '0';
+        return;
+    }
+    clearTimeout(yamlAutoTimer);
+    yamlAutoTimer = setTimeout(function() { yamlFormat(true); }, 250);
+});
+
+document.getElementById('yamlInput').addEventListener('paste', function() {
+    var self = this;
+    setTimeout(function() { self.dispatchEvent(new Event('input')); }, 0);
+});
+
+document.getElementById('yamlInput').addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        yamlFormat();
+    }
+});
+
 window.addEventListener('load', function() {
     // 先显示缓存数据（无缓存则保持 HTML 中的 0）
     loadCachedStats();
@@ -1592,6 +1970,7 @@ window.addEventListener('load', function() {
     try {
         var t = localStorage.getItem('id_formatter_tab');
         if (t === 'json') switchTab('json');
+        else if (t === 'yaml') switchTab('yaml');
     } catch (e) {}
 });
 </script>
