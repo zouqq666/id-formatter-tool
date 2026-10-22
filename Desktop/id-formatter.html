@@ -532,12 +532,22 @@ textarea::placeholder {
     gap: 18px;
     align-items: stretch;
     flex: 1 1 auto;
-    min-height: 0;
+    min-height: max(480px, 62vh);
 }
 
 .json-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 #jsonInput {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 240px;
+    resize: vertical;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+#yamlInput {
     flex: 1 1 auto;
     height: auto;
     min-height: 240px;
